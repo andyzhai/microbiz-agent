@@ -8,6 +8,8 @@ import { runOperations } from "../src/operations.js";
 import { authorize, OFFLINE_DESTINATION } from "../src/policy.js";
 import { incidentFinish, incidentLookup, propose } from "../src/profiles.js";
 import { createExecutor } from "../src/tools.js";
+import { proposeTriage, validateTriage } from "../src/triage.js";
+import type { TriageReport } from "../src/triage.js";
 import { runExpense } from "../src/workflow.js";
 import { evaluateOperations } from "./evaluate-operations.js";
 
@@ -93,6 +95,45 @@ test("invalid citations, inverted trends, unsupported causes and invented gaps a
   assert.deepEqual(result.report, { observations: [], hypotheses: [], missingInformation: [], nextChecks: [] });
   assert.deepEqual(result.issues.map(i => i.code), ["unsupported_observation", "unsupported_observation",
     "unsupported_causal_assertion", "incorrect_evidence_gap", "missing_health_comparison", "missing_next_check"]);
+});
+
+test("repeated triage findings and checks retain their first occurrence and distinct citations", () => {
+  const evidence = getServiceIncidentEvidence.read(loadAlert("alert-normal")!);
+  const firstEvent = evidence.deployments[0]!;
+  evidence.deployments.push({ ...firstEvent, id: "alert-normal-d2" });
+  const expected = proposeTriage(evidence);
+  const [trend, firstDeployment, secondDeployment] = expected.observations;
+  const [firstHypothesis, secondHypothesis] = expected.hypotheses;
+  assert.ok(trend && firstDeployment && secondDeployment && firstHypothesis && secondHypothesis);
+  const proposed: TriageReport = { ...expected,
+    observations: [trend, firstDeployment, structuredClone(trend), secondDeployment],
+    hypotheses: [firstHypothesis, secondHypothesis, structuredClone(firstHypothesis)],
+    nextChecks: ["compare_deployment_changes", "inspect_sampled_requests", "compare_deployment_changes"],
+  };
+  assert.deepEqual(validateTriage(proposed, evidence), { report: expected, issues: [] });
+
+  proposed.observations.unshift({ ...trend, evidenceIds: [...trend.evidenceIds].reverse() });
+  proposed.hypotheses.unshift({ ...firstHypothesis, certainty: "confirmed" });
+  proposed.missingInformation = ["need_comparison_sample", "need_comparison_sample"];
+  assert.deepEqual(validateTriage(proposed, evidence), { report: expected, issues: [
+    { code: "unsupported_observation" }, { code: "unsupported_causal_assertion" },
+    { code: "incorrect_evidence_gap", claimed: ["need_comparison_sample"], expected: [] },
+  ] });
+});
+
+test("triage compares distinct missing-information claims against the retrieved evidence", () => {
+  const evidence = getServiceIncidentEvidence.read(loadAlert("alert-insufficient")!);
+  const expected = proposeTriage(evidence);
+  const comparison = "need_comparison_sample";
+  const insufficient = { code: "insufficient_evidence" };
+  assert.deepEqual(validateTriage({ ...expected, missingInformation: [comparison, comparison] }, evidence),
+    { report: expected, issues: [insufficient] });
+  const cases: TriageReport["missingInformation"][] = [[], ["no_health_samples"], [comparison, "no_health_samples"]];
+  for (const claimed of cases) {
+    const result = validateTriage({ ...expected, missingInformation: claimed }, evidence);
+    assert.deepEqual(result.report.missingInformation, [comparison]);
+    assert.deepEqual(result.issues, [insufficient, { code: "incorrect_evidence_gap", claimed, expected: [comparison] }]);
+  }
 });
 
 test("failed evidence read, provider timeout and exhausted follow-up budget end the run explicitly", async t => {

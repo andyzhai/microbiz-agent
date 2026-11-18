@@ -10,6 +10,11 @@ const check = z.enum(["inspect_health_history", "compare_deployment_changes", "i
 export const triageSchema = z.strictObject({ observations: z.array(observation).max(12), hypotheses: z.array(hypothesis).max(4),
   missingInformation: z.array(gap).max(2), nextChecks: z.array(check).max(3) });
 export type TriageReport = z.infer<typeof triageSchema>;
+export interface TriageIssue {
+  code: string;
+  claimed?: TriageReport["missingInformation"];
+  expected?: TriageReport["missingInformation"];
+}
 type Sample = IncidentEvidence["samples"][number];
 type Observation = TriageReport["observations"][number];
 
@@ -46,6 +51,16 @@ export function proposeTriage(evidence: IncidentEvidence): TriageReport {
   return report;
 }
 
+function uniqueBy<T>(claims: readonly T[], keyFor: (claim: T) => string): T[] {
+  const seen = new Set<string>();
+  return claims.filter(claim => {
+    const key = keyFor(claim);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function validateTriage(proposed: TriageReport, evidence: IncidentEvidence) {
   const samples = new Map(evidence.samples.map(row => [row.id, row]));
   const events = new Map(evidence.deployments.map(row => [row.id, row]));
@@ -62,7 +77,7 @@ export function validateTriage(proposed: TriageReport, evidence: IncidentEvidenc
     const event = events.get(deploy!);
     return certainty === "possible" && first && last && event && last.errorPercent > first.errorPercent && nearby(first, last, event.at);
   });
-  const issues: { code: string }[] = [];
+  const issues: TriageIssue[] = [];
   for (const claim of proposed.observations) {
     if (!observations.includes(claim)) issues.push({ code: "unsupported_observation" });
   }
@@ -71,10 +86,18 @@ export function validateTriage(proposed: TriageReport, evidence: IncidentEvidenc
   }
   const missingInformation = gaps(evidence);
   if (missingInformation.length) issues.push({ code: "insufficient_evidence" });
-  if (proposed.missingInformation.length !== missingInformation.length ||
-      missingInformation.some(missing => !proposed.missingInformation.includes(missing))) issues.push({ code: "incorrect_evidence_gap" });
+  const claimed = new Set(proposed.missingInformation);
+  if (claimed.size !== missingInformation.length || missingInformation.some(missing => !claimed.has(missing))) {
+    issues.push({ code: "incorrect_evidence_gap", claimed: [...claimed], expected: [...missingInformation] });
+  }
   if (evidence.samples.length >= 2 && !observations.some(o => o.finding.startsWith("error_rate_")))
     issues.push({ code: "missing_health_comparison" });
   if (!proposed.nextChecks.length) issues.push({ code: "missing_next_check" });
-  return { report: { observations, hypotheses, missingInformation, nextChecks: proposed.nextChecks }, issues };
+  const report: TriageReport = {
+    observations: uniqueBy(observations, o => JSON.stringify([o.finding, ...o.evidenceIds])),
+    hypotheses: uniqueBy(hypotheses, h => JSON.stringify([h.relationship, h.certainty, ...h.evidenceIds])),
+    missingInformation,
+    nextChecks: [...new Set(proposed.nextChecks)],
+  };
+  return { report, issues };
 }

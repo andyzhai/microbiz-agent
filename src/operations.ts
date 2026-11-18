@@ -10,14 +10,14 @@ import { taskGateway } from "./task.js";
 import type { GatewayConfig, TaskResult } from "./task.js";
 import { createExecutor, toolProposalSchema } from "./tools.js";
 import { triageSchema, validateTriage } from "./triage.js";
-import type { TriageReport } from "./triage.js";
+import type { TriageIssue, TriageReport } from "./triage.js";
 
 export interface OperationsResult extends TaskResult {
   task: "operations-triage";
   scope: IncidentScope | null;
   report: TriageReport | null;
   evidence: IncidentEvidence | null;
-  issues: readonly { code: string }[];
+  issues: readonly TriageIssue[];
   tools: readonly { name: "getServiceIncidentEvidence" | "unregistered"; outcome: "completed" | "blocked" | "failed" }[];
 }
 
