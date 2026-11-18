@@ -22,6 +22,19 @@ The default adapter is a deterministic offline baseline. The normal example retu
 
 Exit codes are `0` for completed, `2` for needs review and `1` for blocked, failed or invalid arguments. Use `npm run demo -- --help` to list the reviewed fixture IDs.
 
+## Daily expense and service review
+
+Run the combined briefing after building the CLI.
+
+```sh
+npm run demo -- --objective daily-review
+npm run demo -- --objective daily-review --simulate-expense-failure
+```
+
+`daily-review` is the one supported objective. It reviews `receipt-normal` first and then triages `alert-normal`. The offline briefing shows the CAD 12.50 receipt with its source line and checkout's error rate rising from 0.2% to 6.8% with both sample IDs. Each section includes the specialist's status, classification, issues and supporting results. The second command simulates an offline expense outage. It exits 1 and prints the completed service report alongside the failed expense review.
+
+The coordinator assembles the briefing locally. Both children share a four-attempt limit, with at most two attempts for expense review and three for triage. The offline success case uses three. With `--live`, catalog discovery also consumes one shared attempt. A rate limit or exhausted parent budget skips remaining work and records the reason. Runs are read-only and in memory. If interrupted, rerun the command to restart from the original fixtures.
+
 ## Operations triage
 
 On `alert-normal`, checkout's error rate rises from 0.2% at 10:02 UTC to 6.8% at 10:15 UTC. A deployment at 10:11 UTC is a possible explanation. The report cites both samples and the event, then suggests comparing deployment changes and inspecting sampled requests.

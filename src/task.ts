@@ -1,8 +1,8 @@
 import { createGateway } from "./gateway.js";
-import type { Decision, ModelAdapter } from "./gateway.js";
+import type { Decision, ModelAdapter, TaskGateway } from "./gateway.js";
 import type { Classification } from "./policy.js";
 
-export type GatewayConfig = ModelAdapter | (() => ReturnType<typeof createGateway>);
+export type GatewayConfig = ModelAdapter | (() => TaskGateway);
 export function taskGateway(config: GatewayConfig) {
   return typeof config === "function" ? config() : createGateway(config);
 }

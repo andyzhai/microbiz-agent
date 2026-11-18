@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { z } from "zod";
+import { runObjective } from "../src/coordinator.js";
 import { expenseSchema } from "../src/expense.js";
 import { fakeModel } from "../src/fake-model.js";
 import { loadFixture } from "../src/fixtures.js";
@@ -89,6 +90,33 @@ test("ordinary extraction returns a validated draft through the HTTP adapter wit
   assert.equal(result.draft?.totalMinor.value, 1250);
   assert.deepEqual(result.tools, []);
   assert.deepEqual(result.decisions.map(d => [d.route, d.attempts]), [["catalog", 1], ["preferred", 2]]);
+});
+
+test("a coordinated HTTP run shares catalog discovery and charges a repair before blocking the remaining turn", async () => {
+  const requests: string[] = [];
+  const draft = await fakeModel.generate({ instruction: propose, sources: [loadFixture("receipt-normal")!] }, new AbortController().signal);
+  const transport: typeof fetch = async (url, init) => {
+    if (url === OPENROUTER + "/models") {
+      requests.push("catalog");
+      return list();
+    }
+    const body = JSON.parse(String(init?.body));
+    const [{ id }] = JSON.parse(body.messages[1].content);
+    requests.push(id);
+    if (id === "receipt-normal") return reply(draft);
+    assert.doesNotMatch(String(init?.body), /receipt-normal|Demo Paper Shop/);
+    if (requests.length === 3) return reply({ invalid: "restricted response text" });
+    return Response.json({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ type: "function",
+      function: { name: "getServiceIncidentEvidence", arguments: JSON.stringify(loadAlert("alert-normal")!.scope) } }] } }] });
+  };
+  const result = await runObjective("daily-review", () => openRouterGateway("test-key", transport));
+  assert.deepEqual(requests, ["catalog", "receipt-normal", "alert-normal", "alert-normal"]);
+  assert.deepEqual(result.budget, { used: 4, limit: 4 });
+  assert.deepEqual(result.briefing.map(s => s.status), ["completed", "blocked"]);
+  const decisions = result.children[1]!.decisions;
+  assert.equal(decisions[1]?.route, "repair");
+  assert.equal(decisions.at(-1)?.reason, "attempt_budget_exhausted");
+  assert.doesNotMatch(JSON.stringify(result), /test-key|restricted response text/);
 });
 
 test("operations uses the same OpenRouter transport with a scoped native lookup and incident response schema", async () => {

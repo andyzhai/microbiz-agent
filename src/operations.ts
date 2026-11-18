@@ -21,7 +21,8 @@ export interface OperationsResult extends TaskResult {
   tools: readonly { name: "getServiceIncidentEvidence" | "unregistered"; outcome: "completed" | "blocked" | "failed" }[];
 }
 
-export async function runOperations(fixtureId: string, config: GatewayConfig = fakeModel): Promise<OperationsResult> {
+export async function runOperations(fixtureId: string, config: GatewayConfig = fakeModel,
+  grants: readonly string[] = [getServiceIncidentEvidence.name]): Promise<OperationsResult> {
   const task = "operations-triage";
   const source = loadAlert(fixtureId);
   const base = { task, report: null, scope: null, evidence: null, tools: [], decisions: [] } as const;
@@ -30,7 +31,7 @@ export async function runOperations(fixtureId: string, config: GatewayConfig = f
   const gateway = taskGateway(config);
   const initial = { ...base, fixtureId: source.id, classification: source.classification,
     scope: source.scope, decisions: gateway.decisions };
-  const execute = createExecutor(task, source, [getServiceIncidentEvidence.name]);
+  const execute = createExecutor(task, source, grants);
   const State = Annotation.Root({
     proposal: Annotation<GatewayResult<z.infer<typeof toolProposalSchema>>>(),
     result: Annotation<OperationsResult>(),

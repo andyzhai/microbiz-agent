@@ -23,13 +23,14 @@ export interface ExpenseResult extends TaskResult {
   tools: readonly { name: "findExpenseMatches" | "unregistered"; outcome: "completed" | "blocked" | "failed" }[];
 }
 
-export async function runExpense(fixtureId: string, config: GatewayConfig = fakeModel): Promise<ExpenseResult> {
+export async function runExpense(fixtureId: string, config: GatewayConfig = fakeModel,
+  grants: readonly string[] = [findExpenseMatches.name]): Promise<ExpenseResult> {
   const task = "expense-review";
   const source = loadFixture(fixtureId);
   if (!source) return { task, fixtureId: null, classification: "unknown", status: "blocked", draft: null,
     duplicateCandidates: [], issues: [{ code: "unknown_fixture" }], decisions: [], tools: [] };
   const gateway = taskGateway(config);
-  const execute = createExecutor(task, source, [findExpenseMatches.name]);
+  const execute = createExecutor(task, source, grants);
   const possiblePreviousSubmission = source.content.includes("previously submitted");
   const base = { task, fixtureId: source.id, classification: source.classification, draft: null,
     decisions: gateway.decisions, duplicateCandidates: [], tools: [] } as const;
