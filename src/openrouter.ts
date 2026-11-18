@@ -3,6 +3,7 @@ import { AdapterError, createGateway } from "./gateway.js";
 import type { Capability, GatewayLimits, ModelAdapter } from "./gateway.js";
 import { OPENROUTER, roles, validModelRoles } from "./policy.js";
 import type { ModelRequest } from "./policy.js";
+import { createLlmDebugLog } from "./llm-debug-log.js";
 import { toolProposalSchema } from "./tools.js";
 
 const rejection = z.object({
@@ -23,17 +24,19 @@ function providerError(status: number, detail?: z.infer<typeof rejection>): Erro
   return new Error("Provider rejected request");
 }
 
-async function readJson(response: Response, limit: number): Promise<unknown> {
-  if ((!response.ok && ![400, 404, 422].includes(response.status)) || !response.body) {
-    await response.body?.cancel();
-    throw providerError(response.status);
-  }
+async function readBody(body: ReadableStream<Uint8Array>, limit: number, timeoutMs?: number) {
   const chunks: Uint8Array[] = [];
   let bytes = 0;
-  const reader = response.body.getReader();
+  const reader = body.getReader();
+  let expired = false;
+  const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
+    expired = true;
+    void reader.cancel().catch(() => {});
+  }, timeoutMs).unref();
   try {
     for (;;) {
       const { done, value } = await reader.read();
+      if (expired) throw new AdapterError("provider_unavailable");
       if (done) break;
       bytes += value.length;
       if (bytes > limit) {
@@ -46,11 +49,28 @@ async function readJson(response: Response, limit: number): Promise<unknown> {
     if (error instanceof AdapterError) throw error;
     throw new AdapterError("provider_unavailable");
   } finally {
+    clearTimeout(timer);
     reader.releaseLock();
   }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function readJson(response: Response, limit: number, logResponse?: (raw: string) => void, timeoutMs = 30_000): Promise<unknown> {
+  if (!response.body) throw providerError(response.status);
+  if (!response.ok && ![400, 404, 422].includes(response.status)) {
+    // A known HTTP failure (especially 429) must take effect even if its diagnostic body stalls.
+    if (logResponse) void readBody(response.body, limit, timeoutMs).then(text => {
+      JSON.parse(text);
+      logResponse(text);
+    }).catch(() => {});
+    else await response.body.cancel();
+    throw providerError(response.status);
+  }
+  const text = await readBody(response.body, limit);
   let raw: unknown;
-  try { raw = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
+  try { raw = JSON.parse(text); }
   catch { throw response.ok ? new AdapterError("invalid_output") : providerError(response.status); }
+  logResponse?.(text);
   if (!response.ok) {
     const parsed = z.object({ error: rejection }).safeParse(raw);
     throw providerError(response.status, parsed.data?.error);
@@ -139,11 +159,13 @@ export function openRouterGateway(key: string, transport = fetch, options: Parti
   if (!validModelRoles(roles)) throw new Error("Set LOCAL_MODEL and CLOUD_MODEL to two distinct provider/model:free IDs.");
   const maxTokens = Number(process.env.OPENROUTER_MAX_TOKENS ?? 10_000);
   if (!Number.isSafeInteger(maxTokens) || maxTokens < 1) throw new Error("OPENROUTER_MAX_TOKENS must be a positive safe integer.");
+  const logRequest = createLlmDebugLog(key);
   async function send(url: string, init: RequestInit, cap: number) {
+    const logResponse = typeof init.body === "string" ? logRequest?.(init.body) : undefined;
     let response;
     try { response = await transport(url, { ...init, redirect: "error" }); }
     catch { throw new AdapterError("provider_unavailable"); }
-    return readJson(response, cap);
+    return readJson(response, cap, logResponse, options.timeoutMs);
   }
   const { onlyRole, ...limits } = options;
   const optionalReasoning = new Set<string>();

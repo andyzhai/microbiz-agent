@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { z } from "zod";
 import { runObjective } from "../src/coordinator.js";
@@ -32,10 +35,88 @@ const nativeCall = () => Response.json({ choices: [{ finish_reason: "tool_calls"
 const schema = z.strictObject({ answer: z.string() });
 
 const originalMaxTokens = process.env.OPENROUTER_MAX_TOKENS;
-beforeEach(() => { delete process.env.OPENROUTER_MAX_TOKENS; });
+const originalDebugLog = process.env.LLM_DEBUG_LOG;
+beforeEach(() => {
+  delete process.env.OPENROUTER_MAX_TOKENS;
+  process.env.LLM_DEBUG_LOG = "false";
+});
 afterEach(() => {
+  if (originalDebugLog === undefined) delete process.env.LLM_DEBUG_LOG;
+  else process.env.LLM_DEBUG_LOG = originalDebugLog;
   if (originalMaxTokens === undefined) delete process.env.OPENROUTER_MAX_TOKENS;
   else process.env.OPENROUTER_MAX_TOKENS = originalMaxTokens;
+});
+
+test("debug files pair the exact generation bodies across a native tool round trip and start fresh per run", async t => {
+  const cwd = process.cwd();
+  const temp = mkdtempSync(join(tmpdir(), "microbiz-log-"));
+  process.chdir(temp);
+  t.after(() => { process.chdir(cwd); rmSync(temp, { recursive: true, force: true }); });
+
+  const posts: string[] = [];
+  const responses = [await nativeCall().text(), await reply(finalDraft).text()].map(raw =>
+    JSON.stringify(JSON.parse(raw), null, 2) + "\n");
+  const transport: typeof fetch = async (url, init) => {
+    if (url === OPENROUTER + "/models") return list();
+    posts.push(String(init?.body));
+    return new Response(responses[(posts.length - 1) % 2]);
+  };
+  const run = () => runExpense(source.id, () => openRouterGateway("mock-api-secret", transport));
+  await run();
+  assert.equal(existsSync(".microbiz"), false);
+  delete process.env.LLM_DEBUG_LOG;
+  await run();
+  process.env.LLM_DEBUG_LOG = "true";
+  await run();
+  assert.equal(posts.length, 6);
+  const root = join(".microbiz", "logs");
+  const runs = readdirSync(root);
+  assert.equal(runs.length, 2);
+  for (const id of runs) {
+    const dir = join(root, id);
+    assert.deepEqual(readdirSync(dir).sort(), ["001-request.json", "001-response.json", "002-request.json", "002-response.json"]);
+    for (const [index, prefix] of ["001", "002"].entries()) {
+      assert.equal(readFileSync(join(dir, prefix + "-request.json"), "utf8"), posts[index]);
+      assert.equal(readFileSync(join(dir, prefix + "-response.json"), "utf8"), responses[index]);
+    }
+  }
+});
+
+test("provider error logs redact echoed credentials and nested JSON while preserving the rate limit", async t => {
+  const cwd = process.cwd();
+  const temp = mkdtempSync(join(tmpdir(), "microbiz-redact-"));
+  process.chdir(temp);
+  t.after(() => { process.chdir(cwd); rmSync(temp, { recursive: true, force: true }); });
+  process.env.LLM_DEBUG_LOG = "true";
+  // Use a value already in an authorized fixture to exercise outbound redaction.
+  const key = source.id;
+  const secret = "qwerty-environment-secret";
+  const originalSecret = process.env.TEST_ACCESS_TOKEN;
+  process.env.TEST_ACCESS_TOKEN = secret;
+  t.after(() => {
+    if (originalSecret === undefined) delete process.env.TEST_ACCESS_TOKEN;
+    else process.env.TEST_ACCESS_TOKEN = originalSecret;
+  });
+  const details = { password: "dragon-secret", Authorization: "Bearer abc123456789",
+    api_key: "tiny", credentials: [{ value: "private-array-value" }] };
+  const error = { message: `rejected ${key} and ${secret}\nAuthorization: Bearer def456-unknown`,
+    metadata: { raw: JSON.stringify(details), ...details } };
+  const result = await openRouterGateway(key, async (url, init) => {
+    if (url === OPENROUTER + "/models") return list();
+    assert.ok(String(init?.body).includes(key));
+    return Response.json({ error }, { status: 429, headers: { "Set-Cookie": "header-only-secret" } });
+  }).generate(request, schema);
+  assert.equal(result.decision.reason, "rate_limited");
+  const root = join(".microbiz", "logs");
+  const dir = join(root, readdirSync(root)[0]!);
+  const text = readFileSync(join(dir, "001-response.json"), "utf8");
+  const masked = { password: "dragon***", Authorization: "Bearer abc123***", api_key: "***", credentials: "***" };
+  assert.deepEqual(JSON.parse(text).error, { message: "rejected receip*** and qwerty***\nAuthorization: Bearer def456***",
+    metadata: { raw: JSON.stringify(masked), ...masked } });
+  const body = readFileSync(join(dir, "001-request.json"), "utf8");
+  assert.equal(JSON.parse(JSON.parse(body).messages[1].content)[0].id, "receip***");
+  assert.ok(!(text + body).includes(key));
+  assert.doesNotMatch(text + body, /header-only-secret/);
 });
 
 test("OpenRouter HTTP contract exercises alternate selection, native tool lookup and complete follow-up", async () => {

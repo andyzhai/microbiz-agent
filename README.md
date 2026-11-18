@@ -33,7 +33,7 @@ npm run demo -- --objective daily-review --simulate-expense-failure
 
 `daily-review` is the one supported objective. It reviews `receipt-normal` first and then triages `alert-normal`. The offline briefing shows the CAD 12.50 receipt with its source line and checkout's error rate rising from 0.2% to 6.8% with both sample IDs. Each section includes the specialist's status, classification, issues and supporting results. The second command simulates an offline expense outage. It exits 1 and prints the completed service report alongside the failed expense review.
 
-The coordinator assembles the briefing locally. Both children share a four-attempt limit, with at most two attempts for expense review and three for triage. The offline success case uses three. With `--live`, catalog discovery also consumes one shared attempt. A rate limit or exhausted parent budget skips remaining work and records the reason. Runs are read-only and in memory. If interrupted, rerun the command to restart from the original fixtures.
+The coordinator assembles the briefing locally. Both children share a four-attempt limit, with at most two attempts for expense review and three for triage. The offline success case uses three. With `--live`, catalog discovery also consumes one shared attempt. A rate limit or exhausted parent budget skips remaining work and records the reason. Workflow state stays in memory. If interrupted, rerun the command to restart from the original fixtures.
 
 ## Operations triage
 
@@ -68,6 +68,24 @@ Set `OPENROUTER_MAX_TOKENS` in `.env` to a positive integer. It defaults to **10
 The live demo allows up to four HTTP attempts including one catalog GET, with a 30-second timeout per attempt. Malformed output can receive one regeneration within that budget. A 429 ends the run. Input and decoded output are each capped at 8 KiB. For the bundled English receipts and schemas the router estimates one input token per three UTF-8 bytes, rounded up, plus 64 tokens for chat framing. Decisions include model, location, reason, attempt ordinal and reported token usage.
 
 Only the bundled data and static application instructions can enter model context. A tool proposal can request prior expenses for the active receipt or incident evidence for the active alert. The follow-up contains the validated call and result. The executor permits at most two reads per run. Each current graph needs at most one. The CLI prints the review and discards state on exit.
+
+### Local LLM debug logs
+
+OpenRouter generation logging defaults to enabled. Set `LLM_DEBUG_LOG=true` in `.env` to enable it explicitly, or `LLM_DEBUG_LOG=false` to disable it for the next run. Offline demos and catalog lookups create no logs.
+
+From the working directory, open `.microbiz/logs/`. Each workflow run has its own timestamped folder. Within it, `001-request.json` contains the body sent to OpenRouter and `001-response.json` contains the original provider JSON, including any native tool calls and token usage. Match files by number to follow tool results, repairs and alternate-model attempts. A request can stand alone if the call fails before a complete, valid JSON response arrives within the transport size limit.
+
+HTTP headers are excluded. The logger masks configured credentials, credential fields and recognizable secrets in text, including JSON inside tool arguments. A masked credential shows its first six characters followed by `***`. Values of six characters or fewer are fully masked. Prompts and model output are otherwise readable, so keep these local files private. Git ignores `.microbiz/`.
+
+Run these PowerShell commands from the project directory to inspect the latest run.
+
+```powershell
+$run = Get-ChildItem -Directory .microbiz/logs | Sort-Object Name -Descending | Select-Object -First 1
+Get-ChildItem -LiteralPath $run.FullName
+Get-Content -Raw -LiteralPath (Join-Path $run.FullName '001-response.json')
+```
+
+Delete one run by removing its folder. To delete all recorded runs from the project directory, use `Remove-Item -LiteralPath .microbiz/logs -Recurse -Force` in PowerShell or `rm -r .microbiz/logs` in a POSIX shell.
 
 ## Verification
 
