@@ -6,6 +6,7 @@ import { getServiceIncidentEvidence, loadAlert } from "./incident-fixtures.js";
 import { runOperations } from "./operations.js";
 import type { OperationsResult } from "./operations.js";
 import type { TaskResult } from "./task.js";
+import type { IncidentBackend } from "./tools.js";
 import { runExpense } from "./workflow.js";
 import type { ExpenseResult } from "./workflow.js";
 
@@ -45,7 +46,7 @@ function headline(result: ChildResult | Unavailable): string {
   return "See the service observations and evidence gaps.";
 }
 
-export async function runObjective(objective: string, makeGateway = () => createGateway(fakeModel)) {
+export async function runObjective(objective: string, makeGateway = () => createGateway(fakeModel), backend: IncidentBackend = "direct") {
   const children: (ChildResult | Unavailable)[] = [];
   if (objective !== "daily-review") return { objective: null, status: "blocked" as const,
     issues: [{ code: "unsupported_objective" }], budget: null, briefing: [], children };
@@ -61,7 +62,7 @@ export async function runObjective(objective: string, makeGateway = () => create
     const child = gateway.forTask(task, source, maxAttempts);
     try {
       const result = task === "expense-review" ? await runExpense(source.id, () => child, grants) :
-        await runOperations(source.id, () => child, grants);
+        await runOperations(source.id, () => child, grants, backend);
       if (result.classification !== "synthetic" || result.fixtureId !== source.id || result.task !== task) {
         children.push({ ...base, classification: result.classification, status: "blocked",
           issues: [{ code: "result_scope_denied" }], decisions: [] });

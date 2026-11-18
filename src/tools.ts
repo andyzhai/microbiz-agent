@@ -4,6 +4,7 @@ import type { ExpenseMatch } from "./expense-matches.js";
 import { getServiceIncidentEvidence } from "./incident-fixtures.js";
 import type { IncidentEvidence } from "./incident-fixtures.js";
 import { isTaskFixture } from "./fixtures.js";
+import { readLocalBridgeEvidence } from "./localbridge.js";
 import type { Source } from "./policy.js";
 
 export const toolProposalSchema = z.strictObject({ name: z.string().min(1).max(64), arguments: z.record(z.string(), z.unknown()) });
@@ -29,12 +30,13 @@ export type ToolError = "tool_denied" | "tool_arguments_denied" | "tool_budget_e
 type ReadOutcome<T> = ({ exchange: Exchange; error?: never } & T) |
   { error: ToolError; exchange?: never; matches?: never; evidence?: never };
 type Executor<T> = (proposal: ToolProposal) => ReadOutcome<T>;
+export type IncidentBackend = "direct" | "localbridge";
 
 function scopedExecutor<A, R, T>(task: string, source: Source, grants: readonly string[], tool: ReadTool<A, R>,
-  expose: (data: R) => T): Executor<T> {
+  expose: (data: R) => T) {
   const allowed = new Set(grants);
   let calls = 0;
-  return (proposal: ToolProposal) => {
+  return (proposal: ToolProposal): ReadOutcome<T> | Promise<ReadOutcome<T>> => {
     if (proposal.name !== tool.name || tool.task !== task || tool.effect !== "read" || tool.approvalRequired ||
         !allowed.has(tool.name) || !isTaskFixture(task, source) || source.classification !== "synthetic" || tool.classification !== "synthetic") return { error: "tool_denied" };
     const args = tool.args.safeParse(proposal.arguments);
@@ -43,15 +45,20 @@ function scopedExecutor<A, R, T>(task: string, source: Source, grants: readonly 
     if (calls >= 2) return { error: "tool_budget_exhausted" } as const;
     calls++;
     try {
-      const result = tool.result.safeParse(tool.read(source));
-      if (!result.success) return { error: "invalid_tool_result" };
-      const resultJson = JSON.stringify(result.data);
-      if (Buffer.byteLength(resultJson) > 2048) return { error: "invalid_tool_result" };
-      // Reconstruct one assistant/tool turn without replaying arbitrary provider history.
-      const exchange = Object.freeze({ source, classification: source.classification, name: tool.name,
-        argumentsJson: JSON.stringify(args.data), resultJson });
-      exchanges.add(exchange);
-      return { exchange, ...expose(result.data) };
+      const validate = (value: unknown): ReadOutcome<T> => {
+        const result = tool.result.safeParse(value);
+        if (!result.success) return { error: "invalid_tool_result" };
+        const resultJson = JSON.stringify(result.data);
+        if (Buffer.byteLength(resultJson) > 2048) return { error: "invalid_tool_result" };
+        // Reconstruct one assistant/tool turn without replaying arbitrary provider history.
+        const exchange = Object.freeze({ source, classification: source.classification, name: tool.name,
+          argumentsJson: JSON.stringify(args.data), resultJson });
+        exchanges.add(exchange);
+        return { exchange, ...expose(result.data) };
+      };
+      const value = tool.read(source);
+      if (value instanceof Promise) return value.then(validate).catch(() => ({ error: "invalid_tool_result" as const }));
+      return validate(value);
     } catch {
       return { error: "invalid_tool_result" };
     }
@@ -61,11 +68,15 @@ function scopedExecutor<A, R, T>(task: string, source: Source, grants: readonly 
 type ExpenseRead = { matches: ExpenseMatch[] };
 type IncidentRead = { evidence: IncidentEvidence };
 export function createExecutor(task: "operations-triage", source: Source, grants: readonly string[]): Executor<IncidentRead>;
+export function createExecutor(task: "operations-triage", source: Source, grants: readonly string[], backend: IncidentBackend):
+  (proposal: ToolProposal) => ReadOutcome<IncidentRead> | Promise<ReadOutcome<IncidentRead>>;
 export function createExecutor(task: "expense-review", source: Source, grants: readonly string[]): Executor<ExpenseRead>;
 export function createExecutor(task: string, source: Source, grants: readonly string[]): Executor<ExpenseRead | IncidentRead>;
-export function createExecutor(task: string, source: Source, grants: readonly string[]) {
+export function createExecutor(task: string, source: Source, grants: readonly string[], backend: IncidentBackend = "direct"):
+  (proposal: ToolProposal) => ReadOutcome<ExpenseRead | IncidentRead> | Promise<ReadOutcome<ExpenseRead | IncidentRead>> {
   if (task === getServiceIncidentEvidence.task) {
-    return scopedExecutor(task, source, grants, getServiceIncidentEvidence, evidence => ({ evidence }));
+    const tool = backend === "localbridge" ? { ...getServiceIncidentEvidence, read: readLocalBridgeEvidence } : getServiceIncidentEvidence;
+    return scopedExecutor(task, source, grants, tool, evidence => ({ evidence }));
   }
   return scopedExecutor(task, source, grants, findExpenseMatches, matches => ({ matches }));
 }

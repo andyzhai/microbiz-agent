@@ -1,0 +1,166 @@
+{
+  "server/discover": {
+    "result": {
+      "supportedVersions": [
+        "2026-07-28"
+      ],
+      "capabilities": {
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "resultType": "complete",
+      "ttlMs": 0,
+      "cacheScope": "private",
+      "_meta": {
+        "io.modelcontextprotocol/serverInfo": {
+          "name": "secure-filesystem-server",
+          "version": "0.1.0"
+        }
+      }
+    },
+    "jsonrpc": "2.0",
+    "id": 1
+  },
+  "tools/list": {
+    "result": {
+      "tools": [
+        {
+          "name": "read_text_file",
+          "title": "Read Text File",
+          "description": "Read the complete contents of a file from the file system as text. Handles various text encodings and provides detailed error messages if the file cannot be read. Use this tool when you need to examine the contents of a single file. Use the 'head' parameter to read only the first N lines of a file, or the 'tail' parameter to read only the last N lines of a file. Operates on the file as text regardless of extension. Only works within allowed directories.",
+          "inputSchema": {
+            "type": "object",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "tail": {
+                "description": "If provided, returns only the last N lines of the file",
+                "type": "number"
+              },
+              "head": {
+                "description": "If provided, returns only the first N lines of the file",
+                "type": "number"
+              }
+            },
+            "required": [
+              "path"
+            ]
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "openWorldHint": false
+          },
+          "_meta": {
+            "securitySchemes": [
+              {
+                "type": "oauth2",
+                "scopes": [
+                  "files"
+                ]
+              }
+            ]
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "write_file",
+          "title": "Write File",
+          "description": "Create a new file or completely overwrite an existing file with new content. Use with caution as it will overwrite existing files without warning. Handles text content with proper encoding. Only works within allowed directories.",
+          "inputSchema": {
+            "type": "object",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ]
+          },
+          "annotations": {
+            "readOnlyHint": false,
+            "idempotentHint": true,
+            "destructiveHint": true,
+            "openWorldHint": false
+          },
+          "_meta": {
+            "securitySchemes": [
+              {
+                "type": "oauth2",
+                "scopes": [
+                  "files"
+                ]
+              }
+            ]
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ],
+      "resultType": "complete",
+      "ttlMs": 0,
+      "cacheScope": "private",
+      "_meta": {
+        "io.modelcontextprotocol/serverInfo": {
+          "name": "secure-filesystem-server",
+          "version": "0.1.0"
+        }
+      }
+    },
+    "jsonrpc": "2.0",
+    "id": 2
+  },
+  "tools/call": {
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"fixtureId\":\"alert-normal\",\"classification\":\"synthetic\",\"scope\":{\"service\":\"checkout\",\"start\":\"2026-04-01T10:00:00.000Z\",\"end\":\"2026-04-01T10:30:00.000Z\"},\"evidence\":{\"samples\":[{\"id\":\"alert-normal-s1\",\"at\":\"2026-04-01T10:02:00.000Z\",\"errorPercent\":0.2},{\"id\":\"alert-normal-s2\",\"at\":\"2026-04-01T10:15:00.000Z\",\"errorPercent\":6.8}],\"deployments\":[{\"id\":\"alert-normal-d1\",\"at\":\"2026-04-01T10:11:00.000Z\"}]}}\n"
+        }
+      ],
+      "structuredContent": {
+        "content": "{\"fixtureId\":\"alert-normal\",\"classification\":\"synthetic\",\"scope\":{\"service\":\"checkout\",\"start\":\"2026-04-01T10:00:00.000Z\",\"end\":\"2026-04-01T10:30:00.000Z\"},\"evidence\":{\"samples\":[{\"id\":\"alert-normal-s1\",\"at\":\"2026-04-01T10:02:00.000Z\",\"errorPercent\":0.2},{\"id\":\"alert-normal-s2\",\"at\":\"2026-04-01T10:15:00.000Z\",\"errorPercent\":6.8}],\"deployments\":[{\"id\":\"alert-normal-d1\",\"at\":\"2026-04-01T10:11:00.000Z\"}]}}\n"
+      },
+      "resultType": "complete",
+      "_meta": {
+        "io.modelcontextprotocol/serverInfo": {
+          "name": "secure-filesystem-server",
+          "version": "0.1.0"
+        }
+      }
+    },
+    "jsonrpc": "2.0",
+    "id": 3
+  }
+}

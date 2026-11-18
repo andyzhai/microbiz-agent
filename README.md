@@ -78,6 +78,23 @@ On `alert-normal`, checkout's error rate rises from 0.2% at 10:02 UTC to 6.8% at
 
 Run `npm run evaluate:operations` for the offline eight-alert evaluation. It scores coverage of annotated findings, evidence support for factual claims, unsupported causal assertions, and the relevance of next checks and uncertainty to each case.
 
+### Read service evidence through LocalBridge
+
+Build the CLI in a directory accessible to your LocalBridge server. The build writes one reviewed synthetic alert per file in `dist/incident-evidence/`. The client uses the OAuth-protected MCP endpoint at `http://127.0.0.1:3000/mcp` and the LocalBridge 0.1.0 contract for protocol version `2026-07-28`.
+
+Obtain a **Bearer access token** through your LocalBridge OAuth client using the bridge's configured MCP resource and the `files` scope. If you use MCP Inspector, follow the Inspector OAuth instructions in LocalBridge's `docs/SETUP_AND_TESTING.md`. Set `LOCALBRIDGE_ACCESS_TOKEN` in the CLI environment. In PowerShell 7.1 or later, the masked prompt below keeps the token out of command history.
+
+```powershell
+npm run build
+$env:LOCALBRIDGE_ACCESS_TOKEN = Read-Host -MaskInput "LocalBridge access token"
+npm run demo -- alert-normal
+npm run demo -- --mcp alert-normal
+```
+
+Both commands use the offline model and should report checkout rising from 0.2% to 6.8%, citing `alert-normal-s1` and `alert-normal-s2`. The MCP run calls `read_text_file` with the selected alert's fixed path after checking the server identity and tool schemas. The host verifies the returned scope, classification and evidence against the bundled fixture before passing evidence to the model.
+
+`--mcp` also works with `--objective daily-review` and with operations `--export` and `--review`. A missing token yields `missing_localbridge_access_token`. An expired token, unreachable server, changed contract or mismatched file ends the read with `invalid_tool_result`. Check token expiry, the bridge's allowed directory and the build output if a read fails. The three MCP requests share a five-second deadline.
+
 ## OpenRouter
 
 For a new checkout, copy `.env.example` to `.env` and enter your `OPENROUTER_API_KEY` there. If you already have a key in `.env`, edit the two model settings in that file. Node 24 loads it for the demo, probe and evaluation commands. Environment variables take precedence. Git ignores `.env`.

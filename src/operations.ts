@@ -9,6 +9,7 @@ import { incidentFinish, incidentLookup } from "./profiles.js";
 import { taskGateway } from "./task.js";
 import type { GatewayConfig, TaskResult } from "./task.js";
 import { createExecutor, toolProposalSchema } from "./tools.js";
+import type { IncidentBackend } from "./tools.js";
 import { triageSchema, validateTriage } from "./triage.js";
 import type { TriageIssue, TriageReport } from "./triage.js";
 
@@ -22,7 +23,7 @@ export interface OperationsResult extends TaskResult {
 }
 
 export async function runOperations(fixtureId: string, config: GatewayConfig = fakeModel,
-  grants: readonly string[] = [getServiceIncidentEvidence.name]): Promise<OperationsResult> {
+  grants: readonly string[] = [getServiceIncidentEvidence.name], backend: IncidentBackend = "direct"): Promise<OperationsResult> {
   const task = "operations-triage";
   const source = loadAlert(fixtureId);
   const base = { task, report: null, scope: null, evidence: null, tools: [], decisions: [] } as const;
@@ -31,7 +32,7 @@ export async function runOperations(fixtureId: string, config: GatewayConfig = f
   const gateway = taskGateway(config);
   const initial = { ...base, fixtureId: source.id, classification: source.classification,
     scope: source.scope, decisions: gateway.decisions };
-  const execute = createExecutor(task, source, grants);
+  const execute = createExecutor(task, source, grants, backend);
   const State = Annotation.Root({
     proposal: Annotation<GatewayResult<z.infer<typeof toolProposalSchema>>>(),
     result: Annotation<OperationsResult>(),
@@ -42,7 +43,7 @@ export async function runOperations(fixtureId: string, config: GatewayConfig = f
     }))
     .addNode("reviewEvidence", async ({ proposal }): Promise<{ result: OperationsResult }> => {
       if (proposal.status !== "completed") return { result: { ...initial, status: proposal.status, issues: [{ code: "model_request_failed" }] } };
-      const read = execute(proposal.value);
+      const read = await execute(proposal.value);
       if (read.error) {
         const status = read.error === "invalid_tool_result" ? "failed" : "blocked";
         const name = proposal.value.name === getServiceIncidentEvidence.name ? getServiceIncidentEvidence.name : "unregistered";

@@ -77,3 +77,10 @@ export const getServiceIncidentEvidence = Object.freeze({
     };
   },
 } as const);
+
+export function incidentDocument(source: Source) {
+  const alert = loadAlert(source.id);
+  if (!alert || alert !== source) throw new Error("Unknown alert");
+  return { fixtureId: alert.id, classification: alert.classification, scope: alert.scope,
+    evidence: getServiceIncidentEvidence.read(alert) };
+}
