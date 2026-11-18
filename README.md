@@ -1,12 +1,10 @@
 # MicroBiz Agent
 
-A small TypeScript/LangGraph platform for business specialists sharing model access and deterministic policy checks. The project supports practical agent-engineering learning and incremental development toward a business product.
-
-**Current scope: M0, an offline prototype.** A CLI selects a bundled synthetic receipt, runs a scripted fake model through the gateway, validates its fields and evidence, and prints a draft or an explicit review-required result. No credentials are needed and no model service is contacted.
+A small TypeScript/LangGraph platform for business specialists sharing model access and deterministic policy checks. Its expense-review CLI accepts bundled synthetic receipts and returns a draft with line-level evidence, a proposed category, arithmetic checks and any matching prior entry. Each run starts from a fixture and keeps its state in memory.
 
 ## Run locally
 
-Use Node.js 24.x and npm (verified with Node 24.20.0 and npm 11.19.0).
+Use Node.js 24.x and npm. Install the pinned dependencies, then build before running the CLI tests.
 
 ```sh
 npm ci
@@ -15,37 +13,56 @@ npm run build
 npm test
 npm run demo -- receipt-normal
 npm run demo -- receipt-incomplete
+npm run demo -- receipt-duplicate
 ```
 
-Dependency installation requires access to npm or a populated package cache. After installation, builds, tests and demonstrations run offline. Tests include the built CLI, so build before running them.
+The default adapter is a deterministic offline baseline. The normal example returns CAD 12.50 as 1250 cents. On the incomplete example, date and total stay null. On the duplicate example, the model proposes `findExpenseMatches`, the workflow checks the selected receipt against synthetic prior expenses, and the draft cites prior entry `prior-017` for review.
 
-The normal example prints `completed` with merchant, date, CAD currency and total in integer minor units (`1250` means CAD 12.50). Each non-null field cites a receipt line ID in the selected fixture. The incomplete example prints `needs_review`, with missing date and total left `null` and listed as review issues. Unsupported model values are removed and flagged; malformed output fails with no draft.
+Exit codes are `0` for completed, `2` for needs review and `1` for blocked, failed or invalid arguments. Use `npm run demo -- --help` to list the reviewed fixture IDs.
 
-Exit codes: `0` completed, `2` needs review (expected for the incomplete example), `1` blocked, failed or invalid arguments. `npm run demo -- --help` lists fixture IDs. Arbitrary paths, pasted documents, classification flags and resume commands are unsupported.
+## OpenRouter
 
-## Platform direction
+For a new checkout, copy `.env.example` to `.env` and enter your `OPENROUTER_API_KEY` there. If you already have a key in `.env`, edit the two model settings in that file. Node 24 loads it for the demo, probe and evaluation commands. Environment variables take precedence. Git ignores `.env`.
 
-The platform uses one package, CLI and process. Current flow:
-
-```text
-Bundled fixture ID → trusted loader → expense LangGraph
-                                       ↓
-                               gateway → policy → fake adapter
-                                       ↓
-                              domain validation → console draft
+```sh
+npm run demo -- --live receipt-normal
+npm run demo -- --live receipt-duplicate
 ```
 
-The gateway owns model dispatch, schema checks, bounded attempts, request timeout and size limits. Policy checks source provenance and the actual configured destination; neither module depends on receipt fields. The expense workflow owns its output schema and evidence rules. Decision metadata includes model/location, reason, attempt count, duration and unknown usage; it excludes raw prompts and provider errors. Remote tracing is disabled even when enabled in the shell environment.
+Both roles process data externally. The gateway tries the roles in this order.
 
-Later milestones introduce real expense review and controlled read tools, then an operations-triage specialist and a small sequential coordinator. Both planned initial model roles (`LOCAL_MODEL` and `CLOUD_MODEL`) use external OpenRouter models; the local role name does not imply local processing or privacy. Approved local export, durable review, MCP and verified local inference are separate later increments.
+| Configurable environment variable | Default OpenRouter model |
+| --- | --- |
+| `LOCAL_MODEL` | `nvidia/nemotron-3.5-super-vl:free` |
+| `CLOUD_MODEL` | `dots-studio/dots-3-note-preview:free` |
 
-## Limits and development
+Use two distinct `provider/model:free` IDs. A normal receipt can be extracted directly. A receipt flagged as a possible resubmission gets a native lookup turn before the structured final draft. For models that advertise optional reasoning, the client requests reasoning off to leave room for the draft.
 
-- Only two authored synthetic fixtures are available, in `src/fixtures.ts`. A synthetic label or a matching ID on caller-provided content cannot authorize it.
-- The only permitted destination is the in-memory fake adapter. No network adapter, business tool, coordinator, export or database is implemented.
-- Fake responses test the workflow, not real model quality. Validation supports only the bundled four-field receipt format; no categories, tax calculations, duplicate matching or accounting decisions are made.
-- A run normally uses one model attempt. The per-run gateway ceiling is four attempts, with a one-second request timeout and 8 KiB input/output caps; M0 has no automatic retries or fallback.
-- State exists only in memory. Process exit discards it; start again from a fixture. There is no persistence or resume support.
-- These application checks are not an OS sandbox. Real business data and production use are outside this prototype's scope.
+The gateway checks the current catalog for zero pricing, structured responses, tool calling and sufficient capacity. It can select the second model when the first is ineligible or temporarily unavailable. Each POST names one approved model, requires supported parameters, disables provider fallback and sets zero price ceilings. If neither qualifies, the result reports the failure. [OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection)
 
-Application source, synthetic fixtures and automated tests are self-contained here. Contributions should retain the gateway/policy boundary and add relevant offline tests. `npm test` uses Node's test runner; transport spies verify denied calls and child-process tests prohibit network access while exercising the built CLI.
+Set `OPENROUTER_MAX_TOKENS` in `.env` to a positive integer. It defaults to **10,000** and sets the `max_tokens` sent to OpenRouter. A model must support that output allowance and have room in its context window for the estimated input plus the full allowance.
+
+The live demo allows up to four HTTP attempts including one catalog GET, with a 30-second timeout per attempt. Malformed output can receive one regeneration within that budget. A 429 ends the run. Input and decoded output are each capped at 8 KiB. For the bundled English receipts and schemas the router estimates one input token per three UTF-8 bytes, rounded up, plus 64 tokens for chat framing. Decisions include model, location, reason, attempt ordinal and reported token usage.
+
+Only the bundled data and static application instructions can enter model context. A tool proposal can request a read against the active receipt and approved synthetic dataset. The follow-up contains the validated call and result. The executor permits at most two reads per run. The current graph needs at most one. The CLI prints the review and discards state on exit.
+
+## Verification
+
+`npm run evaluate` scores eight held-out receipts offline. It reports exact critical fields, semantic category accuracy, valid item citations, abstentions, unsupported guesses and arithmetic separately. A readable citation shows which item the model classified. The independent annotation determines whether the category is correct.
+
+Choose **one** live probe for the question you need answered. Each command pins the selected role and disables repair and fallback. Each also uses one public catalog GET.
+
+| Live check | Command | Maximum generation POSTs |
+| --- | --- | --- |
+| NVIDIA structured extraction | `npm run probe -- LOCAL_MODEL receipt-normal` | 1 |
+| Dots structured extraction | `npm run probe -- CLOUD_MODEL receipt-normal` | 1 |
+| NVIDIA native tool round trip | `npm run probe -- LOCAL_MODEL receipt-duplicate` | 2 |
+| Dots native tool round trip | `npm run probe -- CLOUD_MODEL receipt-duplicate` | 2 |
+
+`npm run probe` defaults to the first row. Exit 0 means the ordinary receipt produced a validated 1250-cent draft, or the duplicate receipt produced a native lookup followed by a 2260-cent draft citing `prior-017`. The expected duplicate finding is a successful probe.
+
+For a reproducible **offline fallback check**, run `node --import tsx --test --test-name-pattern="OpenRouter HTTP contract exercises alternate selection" test/openrouter.test.ts`. The test returns HTTP 503 from the preferred model and verifies the authorized alternate and tool follow-up. A separate regression test verifies that HTTP 429 stops generation.
+
+The optional full live evaluation, `npm run evaluate -- --live`, uses the primary role and at most eight generation POSTs total, one per held-out case. It stops on a rate limit. Use it only when you intend to spend that separate evaluation budget.
+
+The supported inputs use a small, line-labeled receipt format. Categories are proposals for review. Arithmetic uses transcribed amounts in integer cents. The tool only compares exact merchant, date, currency and total within the demo prior-expense dataset.

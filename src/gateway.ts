@@ -1,105 +1,165 @@
 import { performance } from "node:perf_hooks";
 import type { z } from "zod";
-import type { Destination, Policy, PolicyReason, Source } from "./policy.js";
+import { authorize } from "./policy.js";
+import type { Destination, ModelRequest, PolicyReason } from "./policy.js";
+export type { ModelRequest } from "./policy.js";
 
-export interface ModelRequest {
-  readonly instruction: string;
-  readonly sources: readonly Source[];
-}
-
-// Destination and transport are bound together by trusted application setup.
-// Model requests cannot override either one.
 export interface ModelAdapter {
   readonly destination: Destination;
-  generate(request: ModelRequest, signal: AbortSignal): Promise<unknown>;
+  inputBytes?(request: ModelRequest): number;
+  generate(request: ModelRequest, signal: AbortSignal, usage?: (tokens: number) => void): Promise<unknown>;
 }
+export interface Capability { structured: boolean; tools: boolean; contextTokens: number; outputTokens: number }
+export interface Routes {
+  readonly candidates: readonly ModelAdapter[];
+  readonly maxOutputTokens: number;
+  readonly allowRepair?: boolean;
+  probe(signal: AbortSignal): Promise<ReadonlyMap<string, Capability>>;
+}
+export type GatewayReason = PolicyReason | "attempt_budget_exhausted" | "catalog_checked" | "capability_unavailable" |
+  "input_too_large" | "output_too_large" | "invalid_output" | "adapter_failed" | "provider_unavailable" | "rate_limited" | "request_timeout";
 
-export type GatewayReason = PolicyReason | "attempt_budget_exhausted" |
-  "input_too_large" | "output_too_large" | "invalid_output" | "adapter_failed" | "request_timeout";
-
+export class AdapterError extends Error {
+  constructor(readonly reason: "invalid_output" | "provider_unavailable" | "rate_limited" | "capability_unavailable" | "input_too_large" | "output_too_large") { super(reason); }
+}
 export interface Decision {
   readonly model: string;
   readonly location: Destination["location"] | "unknown";
+  readonly route: "preferred" | "alternate" | "repair" | "catalog";
   readonly outcome: "completed" | "blocked" | "failed";
   readonly reason: GatewayReason;
   readonly attempts: number;
   readonly durationMs: number;
-  readonly usage: "unknown";
+  readonly usage: number | "unknown";
 }
-
 export type GatewayResult<T> =
   | { status: "completed"; value: T; decision: Decision }
   | { status: "blocked" | "failed"; decision: Decision };
 
-interface GatewayLimits {
-  maxAttempts: number;
-  timeoutMs: number;
-  maxInputBytes: number;
-  maxOutputBytes: number;
+export interface GatewayLimits { maxAttempts: number; timeoutMs: number; maxInputBytes: number; maxOutputBytes: number }
+export const INPUT_BYTES = 8192;
+const timeout = Symbol("timeout");
+
+async function withTimeout<T>(ms: number, send: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { reject(timeout); controller.abort(); }, ms);
+  });
+  try { return await Promise.race([deadline, send(controller.signal)]); }
+  finally { clearTimeout(timer); }
 }
 
-const DEFAULT_LIMITS: Readonly<GatewayLimits> = Object.freeze({
-  maxAttempts: 4,
-  timeoutMs: 1_000,
-  maxInputBytes: 8_192,
-  maxOutputBytes: 8_192,
-});
-
-export function createGateway(
-  adapter: ModelAdapter,
-  authorize: Policy,
-  overrides: Partial<GatewayLimits> = {},
-) {
-  const limits = { ...DEFAULT_LIMITS, ...overrides };
-  if (Object.values(limits).some(value => !Number.isSafeInteger(value) || value < 1) ||
-      limits.maxAttempts > 4) throw new Error("Invalid gateway limits");
-  const destination = Object.freeze({ ...adapter.destination });
-  const generate = adapter.generate.bind(adapter);
+export function createGateway(config: ModelAdapter | Routes, overrides: Partial<GatewayLimits> = {}) {
+  const live = "candidates" in config;
+  const limits = { maxAttempts: 4, timeoutMs: live ? 30_000 : 1000, maxInputBytes: INPUT_BYTES, maxOutputBytes: 8192, ...overrides };
+  if (Object.values(limits).some(v => !Number.isSafeInteger(v) || v < 1) || limits.maxAttempts > 4)
+    throw new Error("Invalid gateway limits");
+  const candidates = (live ? config.candidates : [config]).map(adapter => ({
+    destination: Object.freeze({ ...adapter.destination }), generate: adapter.generate.bind(adapter),
+    inputBytes: adapter.inputBytes?.bind(adapter),
+  }));
+  if (!candidates.length) throw new Error("Missing model configuration");
   let attempts = 0;
+  let rateLimited = false;
+  const decisions: Decision[] = [];
+  const unavailable = new Map<string, GatewayReason>();
+  type Catalog = { capabilities: ReadonlyMap<string, Capability> } | { failure: Decision };
+  let catalog: Promise<Catalog> | undefined;
+  const record = (dest: Destination, route: Decision["route"], outcome: Decision["outcome"], reason: GatewayReason,
+    ordinal: number, started: number, usage: Decision["usage"] = "unknown"): Decision => {
+    const event = { model: reason === "destination_denied" ? "unapproved" : route === "catalog" ? "openrouter-catalog" : dest.model,
+      location: reason === "destination_denied" ? "unknown" as const : dest.location,
+      route, outcome, reason, attempts: ordinal, durationMs: Math.round(performance.now() - started), usage };
+    decisions.push(event);
+    return event;
+  };
+  function probeOnce(routes: Routes, dest: Destination): Promise<Catalog> {
+    if (!catalog) {
+      const ordinal = ++attempts;
+      const started = performance.now();
+      catalog = withTimeout(limits.timeoutMs, signal => routes.probe(signal)).then(capabilities => {
+        record(dest, "catalog", "completed", "catalog_checked", ordinal, started);
+        return { capabilities };
+      }, error => ({
+        failure: record(dest, "catalog", "failed", error === timeout ? "request_timeout" :
+          error instanceof AdapterError && error.reason === "rate_limited" ? "rate_limited" : "provider_unavailable", ordinal, started),
+      }));
+    }
+    return catalog;
+  }
 
   return {
+    decisions,
     async generate<T>(request: ModelRequest, schema: z.ZodType<T>): Promise<GatewayResult<T>> {
-      const started = performance.now();
-      const decision = (outcome: Decision["outcome"], reason: GatewayReason): Decision => ({
-        // Denied configuration must not be echoed into diagnostic output.
-        model: reason === "destination_denied" ? "unapproved" : destination.model,
-        location: reason === "destination_denied" ? "unknown" : destination.location,
-        outcome, reason, attempts,
-        durationMs: Math.round(performance.now() - started),
-        usage: "unknown",
-      });
-      const block = (reason: GatewayReason): GatewayResult<T> => ({ status: "blocked", decision: decision("blocked", reason) });
-      // Snapshot the envelope so it cannot change between authorization and dispatch.
-      const outbound = Object.freeze({ instruction: request.instruction, sources: Object.freeze([...request.sources]) });
-      const permission = authorize(outbound.sources, destination);
-      if (permission !== "allowed_offline_fixture") return block(permission);
-      if (Buffer.byteLength(JSON.stringify(outbound), "utf8") > limits.maxInputBytes) return block("input_too_large");
-      if (attempts >= limits.maxAttempts) return block("attempt_budget_exhausted");
-      attempts += 1; // Reserve before dispatch, including concurrent calls and failures.
-
-      const controller = new AbortController();
-      const timeout = Symbol("timeout");
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const raw = await Promise.race([
-          Promise.resolve().then(() => generate(outbound, controller.signal)),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => { reject(timeout); controller.abort(); }, limits.timeoutMs);
-          }),
-        ]);
-        const serialized = JSON.stringify(raw);
-        if (serialized !== undefined && Buffer.byteLength(serialized, "utf8") > limits.maxOutputBytes) {
-          return { status: "failed", decision: decision("failed", "output_too_large") };
+      // Only these fields have an authorized wire representation. Reject arbitrary history/attachments.
+      const extra = !request || !Array.isArray(request.sources) || Object.keys(request).some(key => !["instruction","sources","exchange"].includes(key));
+      const exchange = request?.exchange;
+      const outbound = Object.freeze({ instruction: request?.instruction, sources: Object.freeze(extra ? [] : [...request.sources]),
+        ...(exchange === undefined ? {} : { exchange }) });
+      let last: GatewayResult<T> | undefined;
+      for (const [index, adapter] of candidates.entries()) {
+        const dest = adapter.destination;
+        let route: Decision["route"] = index === 0 ? "preferred" : "alternate";
+        for (;;) {
+          const started = performance.now();
+          const block = (reason: GatewayReason): GatewayResult<T> => ({ status: "blocked",
+            decision: record(dest, route, "blocked", reason, attempts, started) });
+          const permission = authorize(outbound, dest);
+          if (permission === "destination_denied") return block(permission);
+          if (extra || permission === "source_denied") return block("source_denied");
+          if (rateLimited) return block("rate_limited");
+          const size = adapter.inputBytes?.(outbound) ?? Buffer.byteLength(JSON.stringify(outbound));
+          if (size > limits.maxInputBytes) return block("input_too_large");
+          if (attempts >= limits.maxAttempts) return block("attempt_budget_exhausted");
+          if (live) {
+            const probe = await probeOnce(config, dest);
+            if ("failure" in probe) return { status: "failed", decision: probe.failure };
+            const capabilities = probe.capabilities.get(dest.model);
+            const excluded = unavailable.get(dest.model);
+            if (excluded) {
+              const skipped = block(excluded);
+              last ??= skipped;
+              break;
+            }
+            // Estimate for the bundled English receipts and JSON schemas, including chat framing.
+            const estimatedInputTokens = Math.ceil(size / 3) + 64;
+            if (!capabilities?.structured ||
+                (outbound.instruction.tools !== "[]" && !capabilities.tools) ||
+                capabilities.contextTokens < estimatedInputTokens + config.maxOutputTokens || capabilities.outputTokens < config.maxOutputTokens) {
+              const skipped = block("capability_unavailable");
+              last ??= skipped;
+              break;
+            }
+          } else if (dest.location !== "offline") return block("capability_unavailable");
+          // No await between the final budget check and reservation.
+          if (attempts >= limits.maxAttempts) return block("attempt_budget_exhausted");
+          const ordinal = ++attempts;
+          let usage: Decision["usage"] = "unknown";
+          try {
+            const raw = await withTimeout(limits.timeoutMs, signal => adapter.generate(outbound, signal, tokens => {
+              if (Number.isSafeInteger(tokens) && tokens >= 0) usage = tokens;
+            }));
+            const serialized = JSON.stringify(raw);
+            if (serialized && Buffer.byteLength(serialized) > limits.maxOutputBytes) throw new AdapterError("output_too_large");
+            const parsed = schema.safeParse(raw);
+            if (!parsed.success) throw new AdapterError("invalid_output");
+            return { status: "completed", value: parsed.data, decision: record(dest, route, "completed", permission, ordinal, started, usage) };
+          } catch (error) {
+            const reason = error === timeout ? "request_timeout" : error instanceof AdapterError ? error.reason : "adapter_failed";
+            last = { status: "failed", decision: record(dest, route, "failed", reason, ordinal, started, usage) };
+            if (reason === "rate_limited") rateLimited = true;
+            if (live && config.allowRepair !== false && reason === "invalid_output" && route !== "repair" && attempts < limits.maxAttempts) {
+              route = "repair"; // One clean regeneration, without replaying invalid content.
+              continue;
+            }
+            if (!live || (reason !== "provider_unavailable" && reason !== "request_timeout" && reason !== "capability_unavailable")) return last;
+            unavailable.set(dest.model, reason === "request_timeout" ? "provider_unavailable" : reason);
+            break;
+          }
         }
-        const parsed = schema.safeParse(raw);
-        if (!parsed.success) return { status: "failed", decision: decision("failed", "invalid_output") };
-        return { status: "completed", value: parsed.data, decision: decision("completed", permission) };
-      } catch (error) {
-        // Never propagate provider errors, raw responses, prompts or credentials.
-        return { status: "failed", decision: decision("failed", error === timeout ? "request_timeout" : "adapter_failed") };
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
       }
+      return last!;
     },
   };
 }

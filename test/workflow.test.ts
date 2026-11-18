@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import { fakeModel } from "../src/fake-model.js";
+import { propose } from "../src/profiles.js";
 import { loadFixture } from "../src/fixtures.js";
 import { OFFLINE_DESTINATION } from "../src/policy.js";
 import { runExpense } from "../src/workflow.js";
@@ -13,6 +14,8 @@ test("normal receipt passes through the graph with validated fields and evidence
     date: { value: "2026-01-15", evidence: "L2" },
     currency: { value: "CAD", evidence: "L3" },
     totalMinor: { value: 1250, evidence: "L4" },
+    category: { value: "office_supplies", evidence: "L5" },
+    subtotalMinor: { value: null, evidence: null }, taxMinor: { value: null, evidence: null },
   });
   assert.deepEqual(result.issues, []);
   assert.equal(result.decisions[0]?.attempts, 1);
@@ -55,7 +58,7 @@ test("malformed schema is a failed result with no draft or leaked output", async
 test("invented values on incomplete input are removed even when schema-valid", async () => {
   const result = await runExpense("receipt-incomplete", {
     destination: OFFLINE_DESTINATION,
-    generate: async () => fakeModel.generate({ instruction: "test", sources: [loadFixture("receipt-normal")!] }, new AbortController().signal),
+    generate: async () => fakeModel.generate({ instruction: propose, sources: [loadFixture("receipt-normal")!] }, new AbortController().signal),
   });
   assert.equal(result.status, "needs_review");
   assert.deepEqual(result.draft?.date, { value: null, evidence: null });
@@ -67,7 +70,7 @@ test("invented values on incomplete input are removed even when schema-valid", a
 });
 
 test("invalid dates, fractional or negative amounts, currency and extra keys fail schema validation", async () => {
-  const valid = await fakeModel.generate({ instruction: "test", sources: [loadFixture("receipt-normal")!] }, new AbortController().signal) as Record<string, unknown>;
+  const valid = await fakeModel.generate({ instruction: propose, sources: [loadFixture("receipt-normal")!] }, new AbortController().signal) as Record<string, unknown>;
   for (const change of [
     { date: { value: "2026-02-30", evidence: "L2" } },
     { totalMinor: { value: 12.5, evidence: "L4" } },

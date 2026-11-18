@@ -39,6 +39,18 @@ test("built CLI runs without credentials or network, saves no state, and reruns 
       assert.equal(a.decisions[0].attempts, 1);
       assert.equal(b.decisions[0].attempts, 1);
     }
+    const duplicate = run("receipt-duplicate");
+    assert.equal(duplicate.status, 2);
+    assert.equal(JSON.parse(duplicate.stdout).duplicateCandidates[0].id, "prior-017");
+    const missingKey = run("--live", "receipt-normal");
+    assert.equal(missingKey.status, 1);
+    assert.equal(JSON.parse(missingKey.stderr).issues[0].code, "missing_openrouter_key");
+    env.OPENROUTER_API_KEY = "dummy-key";
+    const deniedLive = run("--live", "arbitrary-secret-input");
+    assert.equal(deniedLive.status, 1);
+    assert.equal(deniedLive.stderr, "");
+    assert.equal(JSON.parse(deniedLive.stdout).status, "blocked");
+    assert.doesNotMatch(deniedLive.stdout, /dummy-key|arbitrary-secret-input/);
     const unknown = run("secret-unknown-id");
     assert.equal(unknown.status, 1);
     assert.equal(JSON.parse(unknown.stdout).status, "blocked");

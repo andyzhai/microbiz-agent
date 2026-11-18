@@ -1,20 +1,21 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import { z } from "zod";
+import { propose } from "../src/profiles.js";
 import { loadFixture } from "../src/fixtures.js";
 import { createGateway } from "../src/gateway.js";
 import type { ModelRequest } from "../src/gateway.js";
-import { createPolicy, OFFLINE_DESTINATION } from "../src/policy.js";
+import { authorize, OFFLINE_DESTINATION } from "../src/policy.js";
 import type { Classification, Source } from "../src/policy.js";
 
 const source = loadFixture("receipt-normal")!;
-const request: ModelRequest = { instruction: "Static test instruction", sources: [source] };
+const request: ModelRequest = { instruction: propose, sources: [source] };
 const schema = z.strictObject({ answer: z.string().max(100) });
-const policy = createPolicy([source]);
+
 
 test("authorized request reaches the fake transport and is validated", async () => {
   const generate = mock.fn(async () => ({ answer: "ok" }));
-  const gateway = createGateway({ destination: OFFLINE_DESTINATION, generate }, policy);
+  const gateway = createGateway({ destination: OFFLINE_DESTINATION, generate });
   const result = await gateway.generate(request, schema);
   assert.equal(result.status, "completed");
   if (result.status === "completed") assert.deepEqual(result.value, { answer: "ok" });
@@ -25,7 +26,7 @@ test("authorized request reaches the fake transport and is validated", async () 
 
 test("forged provenance, arbitrary text, empty and mixed sources never reach transport", async () => {
   const generate = mock.fn(async () => ({ answer: "must not run" }));
-  const gateway = createGateway({ destination: OFFLINE_DESTINATION, generate }, policy);
+  const gateway = createGateway({ destination: OFFLINE_DESTINATION, generate });
   const sources: Source[][] = [[], [{ ...source }], [Object.freeze({ ...source })]];
   for (const classification of ["synthetic", "public", "internal", "sensitive", "unknown"] as Classification[]) {
     sources.push([Object.freeze({ id: source.id, classification, content: "Arbitrary caller text" })]);
@@ -40,13 +41,13 @@ test("forged provenance, arbitrary text, empty and mixed sources never reach tra
   assert.equal(generate.mock.callCount(), 0);
 });
 
-test("even trusted non-synthetic or mutable sources fail closed", async () => {
+test("caller labels and mutable fixture replicas fail closed", async () => {
   for (const classification of ["public", "internal", "sensitive", "unknown"] as Classification[]) {
     const other = Object.freeze({ ...source, classification });
-    assert.equal(createPolicy([other])([other], OFFLINE_DESTINATION), "source_denied");
+    assert.equal(authorize({ ...request, sources: [other] }, OFFLINE_DESTINATION), "source_denied");
   }
   const mutable = { ...source };
-  assert.equal(createPolicy([mutable])([mutable], OFFLINE_DESTINATION), "source_denied");
+  assert.equal(authorize({ ...request, sources: [mutable] }, OFFLINE_DESTINATION), "source_denied");
 });
 
 test("external, local, unknown model and unapproved endpoints never reach transport", async () => {
@@ -57,7 +58,7 @@ test("external, local, unknown model and unapproved endpoints never reach transp
     { ...OFFLINE_DESTINATION, model: "secret-model-name" },
     { ...OFFLINE_DESTINATION, endpoint: "https://example.invalid/secret-token" },
   ]) {
-    const result = await createGateway({ destination, generate }, policy).generate(request, schema);
+    const result = await createGateway({ destination, generate }).generate(request, schema);
     assert.equal(result.status, "blocked");
     assert.equal(result.decision.reason, "destination_denied");
     assert.doesNotMatch(JSON.stringify(result), /secret/);
@@ -67,14 +68,14 @@ test("external, local, unknown model and unapproved endpoints never reach transp
 
 test("attempt reservations cap concurrent calls and failures consume the same budget", async () => {
   const generate = mock.fn(async () => { throw new Error("private-provider-error"); });
-  const gateway = createGateway({ destination: OFFLINE_DESTINATION, generate }, policy);
+  const gateway = createGateway({ destination: OFFLINE_DESTINATION, generate });
   const results = await Promise.all(Array.from({ length: 6 }, () => gateway.generate(request, schema)));
   assert.equal(generate.mock.callCount(), 4);
-  assert.equal(results.filter(result => result.status === "failed").length, 4);
+  assert.deepEqual(results.filter(result => result.status === "failed").map(result => result.decision.attempts), [1, 2, 3, 4]);
   assert.equal(results.filter(result => result.decision.reason === "attempt_budget_exhausted").length, 2);
   assert.doesNotMatch(JSON.stringify(results), /private-provider-error|Static test instruction|Demo Paper/);
-  assert.throws(() => createGateway({ destination: OFFLINE_DESTINATION, generate }, policy, { maxAttempts: Infinity }));
-  assert.throws(() => createGateway({ destination: OFFLINE_DESTINATION, generate }, policy, { maxAttempts: 5 }));
+  assert.throws(() => createGateway({ destination: OFFLINE_DESTINATION, generate }, { maxAttempts: Infinity }));
+  assert.throws(() => createGateway({ destination: OFFLINE_DESTINATION, generate }, { maxAttempts: 5 }));
 });
 
 test("malformed and oversized output are surfaced without returning raw data", async () => {
@@ -83,7 +84,7 @@ test("malformed and oversized output are surfaced without returning raw data", a
     [undefined, "invalid_output"],
     [{ answer: "secret-output".repeat(1_000) }, "output_too_large"],
   ] as const) {
-    const gateway = createGateway({ destination: OFFLINE_DESTINATION, generate: async () => raw }, policy);
+    const gateway = createGateway({ destination: OFFLINE_DESTINATION, generate: async () => raw });
     const result = await gateway.generate(request, schema);
     assert.equal(result.status, "failed");
     assert.equal(result.decision.reason, reason);
@@ -93,7 +94,7 @@ test("malformed and oversized output are surfaced without returning raw data", a
 
 test("input limit denies before transport and timeout aborts without retrying", async () => {
   const generate = mock.fn(async () => ({ answer: "must not run" }));
-  const small = createGateway({ destination: OFFLINE_DESTINATION, generate }, policy, { maxInputBytes: 1 });
+  const small = createGateway({ destination: OFFLINE_DESTINATION, generate }, { maxInputBytes: 1 });
   assert.equal((await small.generate(request, schema)).decision.reason, "input_too_large");
   assert.equal(generate.mock.callCount(), 0);
   let signal: AbortSignal | undefined;
@@ -101,7 +102,7 @@ test("input limit denies before transport and timeout aborts without retrying", 
     signal = value;
     return new Promise<never>(() => {});
   });
-  const gateway = createGateway({ destination: OFFLINE_DESTINATION, generate: hung }, policy, { timeoutMs: 10, maxAttempts: 1 });
+  const gateway = createGateway({ destination: OFFLINE_DESTINATION, generate: hung }, { timeoutMs: 10, maxAttempts: 1 });
   assert.equal((await gateway.generate(request, schema)).decision.reason, "request_timeout");
   assert.equal(signal?.aborted, true);
   assert.equal((await gateway.generate(request, schema)).decision.reason, "attempt_budget_exhausted");
