@@ -3,7 +3,7 @@ import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import type { z } from "zod";
 import { fakeModel } from "./fake-model.js";
 import type { GatewayResult } from "./gateway.js";
-import { getServiceIncidentEvidence, loadAlert } from "./incident-fixtures.js";
+import { getServiceIncidentEvidence, loadAlert, reportEvidence } from "./incident-fixtures.js";
 import type { IncidentEvidence, IncidentScope } from "./incident-fixtures.js";
 import { incidentFinish, incidentLookup } from "./profiles.js";
 import { taskGateway } from "./task.js";
@@ -48,8 +48,7 @@ export async function runOperations(fixtureId: string, config: GatewayConfig = f
         const name = proposal.value.name === getServiceIncidentEvidence.name ? getServiceIncidentEvidence.name : "unregistered";
         return { result: { ...initial, status, tools: [{ name, outcome: status }], issues: [{ code: read.error }] } };
       }
-      const { samples, deployments } = read.evidence;
-      const result = { ...initial, evidence: { samples, deployments: deployments.map(({ id, at }) => ({ id, at })) },
+      const result = { ...initial, evidence: reportEvidence(read.evidence),
         tools: [{ name: getServiceIncidentEvidence.name, outcome: "completed" }] } as const;
       const final = await gateway.generate({ instruction: incidentFinish, sources: [source], exchange: read.exchange }, triageSchema);
       if (final.status !== "completed") return { result: { ...result, status: final.status, issues: [{ code: "model_request_failed" }] } };

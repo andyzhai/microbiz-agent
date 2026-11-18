@@ -3,7 +3,7 @@ import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { z } from "zod";
 import { expenseSchema, validateExpense } from "./expense.js";
 import type { ExpenseDraft, ReviewIssue } from "./expense.js";
-import { findExpenseMatches } from "./expense-matches.js";
+import { findExpenseMatches, needsExpenseLookup } from "./expense-matches.js";
 import type { ExpenseMatch } from "./expense-matches.js";
 import { fakeModel } from "./fake-model.js";
 import { loadFixture } from "./fixtures.js";
@@ -31,7 +31,7 @@ export async function runExpense(fixtureId: string, config: GatewayConfig = fake
     duplicateCandidates: [], issues: [{ code: "unknown_fixture" }], decisions: [], tools: [] };
   const gateway = taskGateway(config);
   const execute = createExecutor(task, source, grants);
-  const possiblePreviousSubmission = source.content.includes("previously submitted");
+  const possiblePreviousSubmission = needsExpenseLookup(source);
   const base = { task, fixtureId: source.id, classification: source.classification, draft: null,
     decisions: gateway.decisions, duplicateCandidates: [], tools: [] } as const;
   const State = Annotation.Root({

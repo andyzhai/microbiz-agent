@@ -22,6 +22,21 @@ The default adapter is a deterministic offline baseline. The normal example retu
 
 Exit codes are `0` for completed, `2` for needs review and `1` for blocked, failed or invalid arguments. Use `npm run demo -- --help` to list the reviewed fixture IDs.
 
+## Save a reviewed expense or operations report
+
+After building the CLI, run either offline example from the project directory.
+
+```sh
+npm run demo -- --export receipt-normal
+npm run demo -- --export alert-normal
+```
+
+The CLI shows the validation findings, destination, SHA-256 digest and exact file contents. Type the approval phrase displayed in that session to create the file. Any other response or end of input cancels the export and exits with code 2. An incomplete receipt, possible duplicate or unresolved incident report shows its findings and cannot be exported.
+
+An approved receipt creates `.microbiz/artifacts/receipt-normal.csv` with integer cents and source-line citations. An approved alert creates `.microbiz/artifacts/alert-normal.txt` with observations, hypotheses, next checks and cited evidence. Each file can be created once at its destination. If a write fails after creation, the CLI reports `possible_partial_write` and the path. Inspect the file before removing it and approving a fresh export.
+
+Git ignores the artifact directory. To clean up the expense demo, run `Remove-Item -LiteralPath .microbiz/artifacts/receipt-normal.csv` in PowerShell. Remove the operations demo the same way using `alert-normal.txt`.
+
 ## Daily expense and service review
 
 Run the combined briefing after building the CLI.

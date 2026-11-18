@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { once } from "node:events";
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +10,53 @@ import { test } from "node:test";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const guard = fileURLToPath(new URL("./deny-network.cjs", import.meta.url));
+
+test("built export CLI requires a fresh response and saves exactly the reviewed bytes for each specialist", async t => {
+  const cwd = mkdtempSync(join(tmpdir(), "microbiz-export-cli-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  async function review(id: string, answer: (phrase: string) => string) {
+    const child = spawn(process.execPath, ["--require", guard, cli, "--export", id], { cwd, timeout: 10_000 });
+    let stdout = "";
+    let stderr = "";
+    child.stderr.setEncoding("utf8").on("data", text => { stderr += text; });
+    child.stdout.setEncoding("utf8").on("data", chunk => {
+      stdout += chunk;
+      const prompt = /Type "(approve [a-f0-9]+)" to create/.exec(stdout);
+      if (prompt && !child.stdin.writableEnded) child.stdin.end(answer(prompt[1]!));
+    });
+    const [status] = await once(child, "close");
+    assert.equal(stderr, "");
+    return { status, stdout, outcome: JSON.parse(stdout.trimEnd().split("\n").at(-1)!) };
+  }
+  let previous = "";
+  const cancelled = await review("receipt-injection", phrase => {
+    previous = phrase;
+    return "reject\n";
+  });
+  assert.equal(cancelled.status, 2);
+  assert.equal(cancelled.outcome.status, "cancelled");
+  assert.equal((await review("receipt-injection", () => previous + "\n")).outcome.status, "cancelled");
+  assert.equal((await review("receipt-normal", () => "")).outcome.status, "cancelled");
+  const unresolved = await review("receipt-incomplete", () => assert.fail("unexpected prompt"));
+  assert.equal(unresolved.status, 2);
+  assert.equal(unresolved.outcome.reason, "export_denied");
+  assert.deepEqual(readdirSync(cwd), []);
+  for (const [id, suffix] of [["receipt-normal", "csv"], ["alert-normal", "txt"]] as const) {
+    const runs = await Promise.all([review(id, phrase => phrase + "\n"), review(id, phrase => phrase + "\n")]);
+    const saved = runs.find(run => run.status === 0);
+    const conflict = runs.find(run => run.status === 1);
+    assert.ok(saved && conflict);
+    assert.equal(conflict.outcome.reason, "destination_exists");
+    assert.equal(saved.status, 0);
+    assert.equal(saved.outcome.status, "exported");
+    assert.equal(saved.outcome.destination, join(realpathSync.native(cwd), ".microbiz", "artifacts", id + "." + suffix));
+    const bytes = readFileSync(saved.outcome.destination);
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), saved.outcome.sha256);
+    const preview = saved.stdout.split("--- begin file ---\n")[1]!.split("--- end file ---")[0];
+    assert.equal(bytes.toString("utf8"), preview);
+    assert.match(preview!, id === "receipt-normal" ? /"1250","L4"/ : /alert-normal-s2.*error rate 6.8%/);
+  }
+});
 
 test("built CLI runs without credentials or network, saves no state, and reruns after process exit", () => {
   const cwd = mkdtempSync(join(tmpdir(), "microbiz-m0-"));

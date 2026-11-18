@@ -24,6 +24,10 @@ export function validModelRoles(config: typeof roles): boolean {
 }
 export type PolicyReason = "allowed_offline_fixture" | "allowed_external_fixture" | "destination_denied" | "source_denied";
 
+export function authorizeArtifact(task: string, source: Source, classification: Classification): boolean {
+  return classification === "synthetic" && source.classification === "synthetic" && isTaskFixture(task, source);
+}
+
 export function authorize(request: ModelRequest, dest: Destination): PolicyReason {
   const offline = dest.location === "offline" && dest.endpoint === OFFLINE_DESTINATION.endpoint && dest.model === OFFLINE_DESTINATION.model;
   const external = dest.location === "external" && dest.endpoint === OPENROUTER + "/chat/completions" &&

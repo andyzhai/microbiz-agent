@@ -36,6 +36,9 @@ export const evidenceSchema = z.strictObject({
   deployments: z.array(record.extend({ log: z.string().max(180).optional() })).max(8),
 });
 export type IncidentEvidence = z.infer<typeof evidenceSchema>;
+export function reportEvidence({ samples, deployments }: IncidentEvidence): IncidentEvidence {
+  return { samples, deployments: deployments.map(({ id, at }) => ({ id, at })) };
+}
 const cases = new Map(Object.entries({ ...demos, ...heldOut }));
 function timestamp(day: string, minute: number) {
   return new Date(Date.parse(day + "T10:00:00Z") + minute * 60_000).toISOString();

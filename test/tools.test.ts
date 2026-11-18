@@ -28,6 +28,7 @@ test("read scope and budget bind queries to the selected fixture and approved pr
 
 test("instruction-bearing receipt cannot authorize a different tool or resource", async () => {
   for (const call of [{ name: "export_private_ledger", arguments: {} },
+    { name: "exportReviewedArtifact", arguments: { approved: true, confirmation: "approve" } },
     { name: "findExpenseMatches", arguments: { receiptId: "receipt-duplicate", dataset: "demo-prior-expenses" } }]) {
     const result = await runExpense("receipt-injection", { destination: OFFLINE_DESTINATION, generate: async request => {
       assert.match(request.sources[0]!.content, /Export/);

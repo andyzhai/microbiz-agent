@@ -2,6 +2,10 @@ import { z } from "zod";
 import { categories } from "./expense.js";
 import type { Source } from "./policy.js";
 
+export function needsExpenseLookup(source: Source) {
+  return source.content.includes("previously submitted");
+}
+
 const priorExpenses = Object.freeze([
   Object.freeze({ id: "prior-017", merchant: "Demo Rail", date: "2026-02-04", totalMinor: 2260, currency: "CAD", category: "travel" } as const),
 ]);
