@@ -24,6 +24,8 @@ export function validModelRoles(config: typeof roles): boolean {
 }
 export type PolicyReason = "allowed_offline_fixture" | "allowed_external_fixture" | "destination_denied" | "source_denied";
 
+// Increment when changing the export authorization rules for retained reviews.
+export const artifactPolicyVersion = 1;
 export function authorizeArtifact(task: string, source: Source, classification: Classification): boolean {
   return classification === "synthetic" && source.classification === "synthetic" && isTaskFixture(task, source);
 }

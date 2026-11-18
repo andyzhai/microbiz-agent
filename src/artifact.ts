@@ -12,7 +12,7 @@ import { authorizeArtifact } from "./policy.js";
 import { triageSchema, validateTriage } from "./triage.js";
 import type { ExpenseResult } from "./workflow.js";
 
-type ReviewedResult = ExpenseResult | OperationsResult;
+export type ReviewedResult = Omit<ExpenseResult, "decisions"> | Omit<OperationsResult, "decisions">;
 
 export function serializeExpenseCsv(draft: ExpenseDraft): string {
   const fields = Object.keys(expenseSchema.shape) as (keyof ExpenseDraft)[];
@@ -26,7 +26,7 @@ export function serializeExpenseCsv(draft: ExpenseDraft): string {
   return header.join(",") + "\r\n" + row.join(",") + "\r\n";
 }
 
-function operationsText(result: OperationsResult, source: NonNullable<ReturnType<typeof loadAlert>>) {
+function operationsText(result: Omit<OperationsResult, "decisions">, source: NonNullable<ReturnType<typeof loadAlert>>) {
   const parsed = triageSchema.safeParse(result.report);
   if (!parsed.success || !isDeepStrictEqual(result.scope, source.scope)) return;
   const evidence = reportEvidence(getServiceIncidentEvidence.read(source));
@@ -45,7 +45,7 @@ function operationsText(result: OperationsResult, source: NonNullable<ReturnType
   ].join("\n");
 }
 
-function previewArtifact(result: ReviewedResult) {
+export function previewArtifact(result: ReviewedResult) {
   if (result.status !== "completed" || result.issues.length || !result.fixtureId) return;
   let content: string | undefined;
   let extension: string;
@@ -85,14 +85,23 @@ type ExportOutcome =
   | { status: "blocked"; reason: "export_denied" | "review_changed" | "unsafe_directory" | "destination_exists" }
   | { status: "failed"; reason: "write_failed" | "possible_partial_write"; destination: string };
 
-function hasCode(error: unknown, code: string) {
+export function hasCode(error: unknown, code: string) {
   return error instanceof Error && "code" in error && error.code === code;
 }
 
 // Create and check each component separately so a link in the parent cannot
 // redirect recursive mkdir. The leaf is opened exclusively, including on retry.
-function isControlledDirectory(path: string) {
+export function isControlledDirectory(path: string) {
   return fs.lstatSync(path).isDirectory() && relative(path, fs.realpathSync.native(path)) === "";
+}
+
+export function ensureControlledDirectory(path: string) {
+  try {
+    fs.mkdirSync(path, { mode: 0o700 });
+  } catch (error) {
+    if (!hasCode(error, "EEXIST")) throw error;
+  }
+  return isControlledDirectory(path);
 }
 
 function writeOnce(review: ArtifactPreview): ExportOutcome {
@@ -101,12 +110,7 @@ function writeOnce(review: ArtifactPreview): ExportOutcome {
   let created = false;
   try {
     for (const path of [dirname(directory), directory]) {
-      try {
-        fs.mkdirSync(path, { mode: 0o700 });
-      } catch (error) {
-        if (!hasCode(error, "EEXIST")) throw error;
-      }
-      if (!isControlledDirectory(path)) return { status: "blocked", reason: "unsafe_directory" };
+      if (!ensureControlledDirectory(path)) return { status: "blocked", reason: "unsafe_directory" };
     }
     const fd = fs.openSync(destination, "wx", 0o600);
     created = true;

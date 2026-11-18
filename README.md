@@ -37,6 +37,26 @@ An approved receipt creates `.microbiz/artifacts/receipt-normal.csv` with intege
 
 Git ignores the artifact directory. To clean up the expense demo, run `Remove-Item -LiteralPath .microbiz/artifacts/receipt-normal.csv` in PowerShell. Remove the operations demo the same way using `alert-normal.txt`.
 
+## Pause and resume an export review
+
+After building, start a review with `npm run demo -- --review receipt-normal` or `npm run demo -- --review alert-normal`. A validated result prints a run ID and exits with code 2 while it awaits approval. Run these commands from the same working directory, replacing `<run-id>` with that ID.
+
+```sh
+npm run demo -- --inspect <run-id>
+npm run demo -- --resume <run-id>
+npm run demo -- --resume <run-id>
+```
+
+The first resume displays the exact file preview and asks for the approval phrase. Replaying a completed run verifies the file and returns its saved receipt. Inspection shows the saved draft or report, destination, digest, status and any approval or receipt. Resume uses the checkpoint offline, including for a review originally prepared with `--live --review`.
+
+Approval lasts **15 minutes** and binds the run, task, fixture, reviewed draft, export policy version, destination and content digest. If an unused approval expires, resume reports `approval_expired`. Resume again to review and approve the file. A changed review or policy requires a new run.
+
+LangGraph's SQLite checkpointer stores each run in `.microbiz/reviews/<run-id>.sqlite`. One operator can hold a run open at a time. A competing command reports `run_busy` and can be retried after the first process exits. Use a local filesystem that supports SQLite locks and hard links, with the review and artifact directories on the same volume.
+
+After a process interruption, resume discards any unfinished staging file. It creates the destination from fully written bytes or records a matching existing file as reconciled. A different file produces `destination_conflict`. If the file for a completed receipt goes missing, replay reports `recorded_artifact_missing`.
+
+Use `npm run demo -- --cancel <run-id>` to abandon an active review. If publication already finished, cancellation records the matching output. Use `npm run demo -- --cleanup <run-id>` to remove the checkpoint and staging file for a completed, cancelled or invalidated run. The exported CSV or report has its own cleanup command above.
+
 ## Daily expense and service review
 
 Run the combined briefing after building the CLI.
