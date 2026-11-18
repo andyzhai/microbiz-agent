@@ -1,13 +1,21 @@
 import type { ExpenseDraft } from "./expense.js";
 import type { ModelAdapter, ModelRequest } from "./gateway.js";
 import { OFFLINE_DESTINATION } from "./policy.js";
-import { lookup } from "./profiles.js";
+import { incidentFinish, incidentLookup, lookup } from "./profiles.js";
+import { evidenceSchema, getServiceIncidentEvidence, incidentScopeSchema } from "./incident-fixtures.js";
+import { proposeTriage } from "./triage.js";
 
 // Deterministic baseline for the fixture format. Never used as a live fallback.
 export const fakeModel: ModelAdapter = Object.freeze({
   destination: OFFLINE_DESTINATION,
   async generate(request: ModelRequest) {
     const source = request.sources[0]!;
+    if (request.instruction === incidentLookup) {
+      const { service, start, end } = JSON.parse(source.content);
+      return { name: getServiceIncidentEvidence.name, arguments: incidentScopeSchema.parse({ service, start, end }) };
+    }
+    if (request.instruction === incidentFinish && request.exchange)
+      return proposeTriage(evidenceSchema.parse(JSON.parse(request.exchange.resultJson)));
     if (request.instruction === lookup) return {
       name: "findExpenseMatches", arguments: { dataset: "demo-prior-expenses", receiptId: source.id },
     };

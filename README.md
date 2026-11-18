@@ -1,6 +1,6 @@
 # MicroBiz Agent
 
-A small TypeScript/LangGraph platform for business specialists sharing model access and deterministic policy checks. Its expense-review CLI accepts bundled synthetic receipts and returns a draft with line-level evidence, a proposed category, arithmetic checks and any matching prior entry. Each run starts from a fixture and keeps its state in memory.
+A small TypeScript/LangGraph CLI with two specialists. Expense review turns a synthetic receipt into a draft with line-level evidence and arithmetic checks. Operations triage turns a synthetic service alert into a report with cited health samples, deployment events and suggested next checks. Both run in memory through the same model gateway, policy and read-only tool executor.
 
 ## Run locally
 
@@ -14,11 +14,21 @@ npm test
 npm run demo -- receipt-normal
 npm run demo -- receipt-incomplete
 npm run demo -- receipt-duplicate
+npm run demo -- alert-normal
+npm run demo -- alert-insufficient
 ```
 
 The default adapter is a deterministic offline baseline. The normal example returns CAD 12.50 as 1250 cents. On the incomplete example, date and total stay null. On the duplicate example, the model proposes `findExpenseMatches`, the workflow checks the selected receipt against synthetic prior expenses, and the draft cites prior entry `prior-017` for review.
 
 Exit codes are `0` for completed, `2` for needs review and `1` for blocked, failed or invalid arguments. Use `npm run demo -- --help` to list the reviewed fixture IDs.
+
+## Operations triage
+
+On `alert-normal`, checkout's error rate rises from 0.2% at 10:02 UTC to 6.8% at 10:15 UTC. A deployment at 10:11 UTC is a possible explanation. The report cites both samples and the event, then suggests comparing deployment changes and inspecting sampled requests.
+
+`getServiceIncidentEvidence` reads the bundled records for the exact service and UTC window in the alert. The window includes the start and excludes the end. The demo flags a possible association when a deployment falls after the earlier sample and within ten minutes of the later, higher sample. On `alert-insufficient`, a single sample leaves the trend unknown. The CLI returns `needs_review` and suggests inspecting health history.
+
+Run `npm run evaluate:operations` for the offline eight-alert evaluation. It scores coverage of annotated findings, evidence support for factual claims, unsupported causal assertions, and the relevance of next checks and uncertainty to each case.
 
 ## OpenRouter
 
@@ -44,7 +54,7 @@ Set `OPENROUTER_MAX_TOKENS` in `.env` to a positive integer. It defaults to **10
 
 The live demo allows up to four HTTP attempts including one catalog GET, with a 30-second timeout per attempt. Malformed output can receive one regeneration within that budget. A 429 ends the run. Input and decoded output are each capped at 8 KiB. For the bundled English receipts and schemas the router estimates one input token per three UTF-8 bytes, rounded up, plus 64 tokens for chat framing. Decisions include model, location, reason, attempt ordinal and reported token usage.
 
-Only the bundled data and static application instructions can enter model context. A tool proposal can request a read against the active receipt and approved synthetic dataset. The follow-up contains the validated call and result. The executor permits at most two reads per run. The current graph needs at most one. The CLI prints the review and discards state on exit.
+Only the bundled data and static application instructions can enter model context. A tool proposal can request prior expenses for the active receipt or incident evidence for the active alert. The follow-up contains the validated call and result. The executor permits at most two reads per run. Each current graph needs at most one. The CLI prints the review and discards state on exit.
 
 ## Verification
 

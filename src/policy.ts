@@ -1,4 +1,4 @@
-import { isFixture } from "./fixtures.js";
+import { isTaskFixture } from "./fixtures.js";
 import { isInstruction } from "./profiles.js";
 import type { Instruction } from "./profiles.js";
 import { isTrustedExchange } from "./tools.js";
@@ -30,8 +30,11 @@ export function authorize(request: ModelRequest, dest: Destination): PolicyReaso
     validModelRoles(roles) && Object.values<string>(roles).includes(dest.model);
   if (!offline && !external) return "destination_denied";
   if (!isInstruction(request.instruction) || !request.sources.length ||
-      request.sources.some(source => !isFixture(source) || source.classification !== "synthetic") ||
+      request.sources.some(source => !isTaskFixture(request.instruction.task, source) || source.classification !== "synthetic") ||
       (request.exchange !== undefined && (request.sources.length !== 1 || !isTrustedExchange(request.exchange, request.sources[0]!))))
+    return "source_denied";
+  const exchange = request.instruction.exchange;
+  if (exchange && (request.sources.length !== 1 || (exchange === "required") !== (request.exchange !== undefined)))
     return "source_denied";
   return offline ? "allowed_offline_fixture" : "allowed_external_fixture";
 }

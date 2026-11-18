@@ -12,6 +12,8 @@ import { OPENROUTER, roles, validModelRoles } from "../src/policy.js";
 import { finish, propose } from "../src/profiles.js";
 import { createExecutor } from "../src/tools.js";
 import { runExpense } from "../src/workflow.js";
+import { runOperations } from "../src/operations.js";
+import { loadAlert } from "../src/incident-fixtures.js";
 
 const source = loadFixture("receipt-duplicate")!;
 const request = { instruction: propose, sources: [source] };
@@ -87,6 +89,37 @@ test("ordinary extraction returns a validated draft through the HTTP adapter wit
   assert.equal(result.draft?.totalMinor.value, 1250);
   assert.deepEqual(result.tools, []);
   assert.deepEqual(result.decisions.map(d => [d.route, d.attempts]), [["catalog", 1], ["preferred", 2]]);
+});
+
+test("operations uses the same OpenRouter transport with a scoped native lookup and incident response schema", async () => {
+  const alert = loadAlert("alert-normal")!;
+  const scope = alert.scope;
+  let posts = 0;
+  const transport: typeof fetch = async (url, init) => {
+    if (url === OPENROUTER + "/models") return list();
+    assert.equal(url, OPENROUTER + "/chat/completions");
+    const body = JSON.parse(String(init?.body));
+    assert.deepEqual(body.tools.map((t: { function: { name: string } }) => t.function.name), ["getServiceIncidentEvidence"]);
+    posts++;
+    if (posts === 1) {
+      assert.equal(body.response_format, undefined);
+      return Response.json({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ type: "function",
+        function: { name: "getServiceIncidentEvidence", arguments: JSON.stringify(scope) } }] } }] });
+    }
+    assert.equal(body.response_format.json_schema.name, "incident_triage");
+    assert.equal(body.tool_choice, "none");
+    assert.deepEqual(JSON.parse(body.messages[2].tool_calls[0].function.arguments), scope);
+    assert.equal(JSON.parse(body.messages[3].content).samples[1].id, "alert-normal-s2");
+    return reply({ observations: [{ finding: "error_rate_increased", evidenceIds: ["alert-normal-s1", "alert-normal-s2"] },
+      { finding: "deployment_recorded", evidenceIds: ["alert-normal-d1"] }], hypotheses: [{
+        relationship: "deployment_may_be_related_to_increase", certainty: "possible",
+        evidenceIds: ["alert-normal-s1", "alert-normal-s2", "alert-normal-d1"] }],
+      missingInformation: [], nextChecks: ["compare_deployment_changes"] });
+  };
+  const result = await runOperations(alert.id, () => openRouterGateway("test-key", transport, { onlyRole: "LOCAL_MODEL", maxAttempts: 3 }));
+  assert.equal(result.status, "completed");
+  assert.equal(posts, 2);
+  assert.deepEqual(result.decisions.map(d => d.attempts), [1, 2, 3]);
 });
 
 test("role configuration accepts only two distinct explicit free model IDs", () => {

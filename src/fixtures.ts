@@ -1,4 +1,5 @@
 import { heldOutReceipts } from "./held-out.js";
+import { loadAlert } from "./incident-fixtures.js";
 import type { Source } from "./policy.js";
 
 // Only authored module literals enter this private registry.
@@ -14,3 +15,7 @@ const fixtures = new Map(Object.entries(texts).map(([id, content]) =>
 export const fixtureIds = Object.freeze([...fixtures.keys()]);
 export function loadFixture(id: string): Source | undefined { return fixtures.get(id); }
 export function isFixture(value: Source): boolean { return !!value && fixtures.get(value.id) === value; }
+export function isTaskFixture(task: string, source: Source): boolean {
+  if (task === "expense-review") return isFixture(source);
+  return task === "operations-triage" && !!source && loadAlert(source.id) === source;
+}

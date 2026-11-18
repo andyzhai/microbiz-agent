@@ -10,7 +10,8 @@
     "test": "node --import tsx --test test/*.test.ts",
     "demo": "node --env-file-if-exists=.env dist/cli.js",
     "probe": "node --env-file-if-exists=.env --import tsx test/probe-models.ts",
-    "evaluate": "node --env-file-if-exists=.env --import tsx test/evaluate-expenses.ts"
+    "evaluate": "node --env-file-if-exists=.env --import tsx test/evaluate-expenses.ts",
+    "evaluate:operations": "node --import tsx test/evaluate-operations.ts"
   },
   "dependencies": {
     "@langchain/core": "1.4.1",

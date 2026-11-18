@@ -7,32 +7,28 @@ import { findExpenseMatches } from "./expense-matches.js";
 import type { ExpenseMatch } from "./expense-matches.js";
 import { fakeModel } from "./fake-model.js";
 import { loadFixture } from "./fixtures.js";
-import { createGateway } from "./gateway.js";
-import type { Decision, GatewayResult, ModelAdapter } from "./gateway.js";
-import type { Classification } from "./policy.js";
+import type { GatewayResult } from "./gateway.js";
+import { taskGateway } from "./task.js";
+import type { GatewayConfig, TaskResult } from "./task.js";
 import { finish, lookup, propose } from "./profiles.js";
 import { createExecutor, toolProposalSchema } from "./tools.js";
 
 const firstResponse = z.union([expenseSchema, toolProposalSchema]);
-export interface ExpenseResult {
+export interface ExpenseResult extends TaskResult {
   task: "expense-review";
-  fixtureId: string | null;
-  classification: Classification;
-  status: "completed" | "needs_review" | "blocked" | "failed";
   draft: ExpenseDraft | null;
   duplicateCandidates: readonly ExpenseMatch[];
   issues: readonly (ReviewIssue | { code: "unknown_fixture" | "model_request_failed" | "tool_denied" | "tool_arguments_denied" |
     "tool_budget_exhausted" | "invalid_tool_result" })[];
   tools: readonly { name: "findExpenseMatches" | "unregistered"; outcome: "completed" | "blocked" | "failed" }[];
-  decisions: readonly Decision[];
 }
 
-export async function runExpense(fixtureId: string, config: ModelAdapter | (() => ReturnType<typeof createGateway>) = fakeModel): Promise<ExpenseResult> {
+export async function runExpense(fixtureId: string, config: GatewayConfig = fakeModel): Promise<ExpenseResult> {
   const task = "expense-review";
   const source = loadFixture(fixtureId);
   if (!source) return { task, fixtureId: null, classification: "unknown", status: "blocked", draft: null,
     duplicateCandidates: [], issues: [{ code: "unknown_fixture" }], decisions: [], tools: [] };
-  const gateway = typeof config === "function" ? config() : createGateway(config);
+  const gateway = taskGateway(config);
   const execute = createExecutor(task, source, [findExpenseMatches.name]);
   const possiblePreviousSubmission = source.content.includes("previously submitted");
   const base = { task, fixtureId: source.id, classification: source.classification, draft: null,
