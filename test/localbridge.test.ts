@@ -13,7 +13,7 @@ const recorded = JSON.parse(readFileSync(new URL("./fixtures/localbridge.json", 
 const source = loadAlert("alert-normal")!;
 const call = { name: getServiceIncidentEvidence.name, arguments: source.scope };
 const token = "isolated-test-token";
-function setToken(t: TestContext) {
+function setLegacyToken(t: TestContext) {
   const original = process.env.LOCALBRIDGE_ACCESS_TOKEN;
   process.env.LOCALBRIDGE_ACCESS_TOKEN = token;
   t.after(() => {
@@ -24,18 +24,18 @@ function setToken(t: TestContext) {
 const pathFor = (id: string) => fileURLToPath(new URL("../dist/incident-evidence/" + id + ".json", import.meta.url));
 
 test("the MCP path reproduces all direct triage outcomes and only reads the selected alert", async t => {
-  setToken(t);
+  setLegacyToken(t);
   let active = source.id;
   const methods: string[] = [];
   const transport = t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
-    assert.equal(url, "http://127.0.0.1:3000/mcp");
+    assert.equal(url, "http://127.0.0.1:3001/mcp");
     assert.equal(init.redirect, "error");
     assert.equal(init.method, "POST");
     assert.ok(init.signal instanceof AbortSignal);
     const headers = new Headers(init.headers);
     const { id, method, params } = JSON.parse(String(init.body));
     methods.push(method);
-    assert.equal(headers.get("Authorization"), "Bearer " + token);
+    assert.equal(headers.has("Authorization"), false);
     assert.equal(headers.get("Mcp-Method"), method);
     assert.equal(headers.get("MCP-Protocol-Version"), "2026-07-28");
     assert.deepEqual(params._meta, { "io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -46,7 +46,7 @@ test("the MCP path reproduces all direct triage outcomes and only reads the sele
     if (method === "tools/call") {
       assert.equal(headers.get("Mcp-Name"), "read_text_file");
       assert.equal(params.name, "read_text_file");
-      assert.deepEqual(params.arguments, { path: pathFor(active) });
+      assert.deepEqual(params.arguments, { path: "C:\\localbridge\\microbiz-sandbox\\incident-evidence\\" + active + ".json" });
       const content = readFileSync(pathFor(active), "utf8");
       reply.result.content[0].text = reply.result.structuredContent.content = content;
     }
@@ -70,7 +70,6 @@ test("the MCP path reproduces all direct triage outcomes and only reads the sele
 });
 
 test("MCP discovery and reads spend the existing scoped grant only after host authorization", async t => {
-  setToken(t);
   const transport = t.mock.method(globalThis, "fetch", async () => Response.json({}, { status: 401 }));
   const make = (grants: string[]) => createExecutor("operations-triage", source, grants, "localbridge");
   assert.equal((await make([])(call)).error, "tool_denied");
@@ -85,7 +84,6 @@ test("MCP discovery and reads spend the existing scoped grant only after host au
 });
 
 test("unexpected identity, tool contracts, remote content and transport failures stop triage before the follow-up", async t => {
-  setToken(t);
   const cases = [
     ["server/discover", (r: typeof recorded) => { r.result._meta["io.modelcontextprotocol/serverInfo"].name = "other"; }],
     ["server/discover", (r: typeof recorded) => { r.result.supportedVersions = ["unknown"]; }],
@@ -93,7 +91,7 @@ test("unexpected identity, tool contracts, remote content and transport failures
     ["tools/list", (r: typeof recorded) => { r.result.tools.push(r.result.tools[0]); }],
     ["tools/list", (r: typeof recorded) => { delete r.result.tools[0].inputSchema.properties.head; }],
     ["tools/list", (r: typeof recorded) => { r.result.tools[0].outputSchema.required = []; }],
-    ["tools/list", (r: typeof recorded) => { r.result.tools[0]._meta.securitySchemes = [{ type: "noauth" }]; }],
+    ["tools/list", (r: typeof recorded) => { r.result.tools[0]._meta.securitySchemes = [{ type: "oauth2", scopes: ["files"] }]; }],
     ["tools/call", (r: typeof recorded) => { r.result.isError = true; }],
     ["tools/call", (r: typeof recorded) => { r.id++; }],
     ["tools/call", (r: typeof recorded) => { r.result.content[0].text = "unreviewed data"; }],
@@ -143,16 +141,15 @@ test("unexpected identity, tool contracts, remote content and transport failures
   }
 });
 
-test("CLI explains a missing LocalBridge token before model or transport dispatch", () => {
+test("CLI attempts the scoped read without credentials and fails closed when LocalBridge is unavailable", () => {
   const run = spawnSync(process.execPath, ["--require", fileURLToPath(new URL("./deny-network.cjs", import.meta.url)),
     fileURLToPath(new URL("../dist/cli.js", import.meta.url)), "--mcp", source.id], {
     env: { ...process.env, LOCALBRIDGE_ACCESS_TOKEN: "" }, encoding: "utf8" });
   assert.equal(run.status, 1);
-  assert.equal(JSON.parse(run.stderr).issues[0].code, "missing_localbridge_access_token");
+  assert.deepEqual(JSON.parse(run.stdout).issues, [{ code: "invalid_tool_result" }]);
 });
 
 test("a stalled LocalBridge call shares the discovery deadline and ends without retry", async t => {
-  setToken(t);
   const controller = new AbortController();
   const deadlines: number[] = [];
   t.mock.method(AbortSignal, "timeout", (ms: number) => {

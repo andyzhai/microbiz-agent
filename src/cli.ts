@@ -54,14 +54,11 @@ if (!id || id === "--help" || (management && (live || mcp)) || (mcp && !objectiv
 Receipts: ${fixtureIds.join(", ")}
 Service alerts: ${alertIds.join(", ")}
 Default is offline. --live uses OPENROUTER_API_KEY and the two configured free external models.
---mcp reads service evidence from LocalBridge using LOCALBRIDGE_ACCESS_TOKEN.
+--mcp reads service evidence from the local MicroBiz bridge on 127.0.0.1:3001.
 Exit codes: 0 completed, 2 needs review/cancelled, 1 blocked/failed/invalid arguments.`);
   process.exitCode = !live && args.length === 1 && args[0] === "--help" ? 0 : 1;
 } else if (live && !process.env.OPENROUTER_API_KEY?.trim()) {
   console.error(JSON.stringify({ status: "blocked", issues: [{ code: "missing_openrouter_key" }] }));
-  process.exitCode = 1;
-} else if (mcp && !process.env.LOCALBRIDGE_ACCESS_TOKEN?.trim()) {
-  console.error(JSON.stringify({ status: "blocked", issues: [{ code: "missing_localbridge_access_token" }] }));
   process.exitCode = 1;
 } else if (management) {
   try {

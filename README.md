@@ -80,20 +80,27 @@ Run `npm run evaluate:operations` for the offline eight-alert evaluation. It sco
 
 ### Read service evidence through LocalBridge
 
-Build the CLI in a directory accessible to your LocalBridge server. The build writes one reviewed synthetic alert per file in `dist/incident-evidence/`. The client uses the OAuth-protected MCP endpoint at `http://127.0.0.1:3000/mcp` and the LocalBridge 0.1.0 contract for protocol version `2026-07-28`.
+MicroBiz uses its own unauthenticated Windows LocalBridge instance at `http://127.0.0.1:3001/mcp`. Its only allowed root is `C:\localbridge\microbiz-sandbox`. The launcher reuses the built LocalBridge 0.1.0 installation at `C:\localbridge\apps\private-chatgpt-local-bridge` and copies the reviewed alert files into the sandbox's `incident-evidence` directory on startup.
 
-Obtain a **Bearer access token** through your LocalBridge OAuth client using the bridge's configured MCP resource and the `files` scope. If you use MCP Inspector, follow the Inspector OAuth instructions in LocalBridge's `docs/SETUP_AND_TESTING.md`. Set `LOCALBRIDGE_ACCESS_TOKEN` in the CLI environment. In PowerShell 7.1 or later, the masked prompt below keeps the token out of command history.
+To start the second instance, run these commands from the MicroBiz checkout. Ctrl+C stops a foreground instance.
 
 ```powershell
 npm run build
-$env:LOCALBRIDGE_ACCESS_TOKEN = Read-Host -MaskInput "LocalBridge access token"
+npm run bridge:microbiz
+```
+
+The launcher binds only to IPv4 loopback. Keep port 3001 out of tunnels, reverse proxies and port-forwarding rules. Local processes that connect directly can use LocalBridge's filesystem tools within this sandbox.
+
+With the listener running, compare both retrieval paths from another terminal.
+
+```powershell
 npm run demo -- alert-normal
 npm run demo -- --mcp alert-normal
 ```
 
 Both commands use the offline model and should report checkout rising from 0.2% to 6.8%, citing `alert-normal-s1` and `alert-normal-s2`. The MCP run calls `read_text_file` with the selected alert's fixed path after checking the server identity and tool schemas. The host verifies the returned scope, classification and evidence against the bundled fixture before passing evidence to the model.
 
-`--mcp` also works with `--objective daily-review` and with operations `--export` and `--review`. A missing token yields `missing_localbridge_access_token`. An expired token, unreachable server, changed contract or mismatched file ends the read with `invalid_tool_result`. Check token expiry, the bridge's allowed directory and the build output if a read fails. The three MCP requests share a five-second deadline.
+`--mcp` also works with `--objective daily-review` and with operations `--export` and `--review`. An unreachable server, changed contract or mismatched evidence file ends the read with `invalid_tool_result`. The three MCP requests share a five-second deadline.
 
 ## OpenRouter
 

@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "demo": "node --env-file-if-exists=.env dist/cli.js",
+    "bridge:microbiz": "node scripts/start-microbiz-bridge.mjs",
     "probe": "node --env-file-if-exists=.env --import tsx test/probe-models.ts",
     "evaluate": "node --env-file-if-exists=.env --import tsx test/evaluate-expenses.ts",
     "evaluate:operations": "node --import tsx test/evaluate-operations.ts"

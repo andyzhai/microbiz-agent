@@ -1,10 +1,11 @@
-import { fileURLToPath } from "node:url";
+import { win32 } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { incidentDocument } from "./incident-fixtures.js";
 import type { Source } from "./policy.js";
 
-const endpoint = "http://127.0.0.1:3000/mcp";
+export const microbizSandbox = "C:\\localbridge\\microbiz-sandbox";
+const endpoint = "http://127.0.0.1:3001/mcp";
 const protocol = "2026-07-28";
 const toolName = "read_text_file";
 const dialect = "https://json-schema.org/draft/2020-12/schema";
@@ -44,14 +45,12 @@ async function boundedJson(response: Response, limit: number): Promise<unknown> 
 // Only invoked after host authorization. The model has no control over the endpoint, tool or path.
 export async function readLocalBridgeEvidence(source: Source) {
   const expected = incidentDocument(source);
-  const token = process.env.LOCALBRIDGE_ACCESS_TOKEN?.trim();
-  if (!token) throw new Error("Missing LocalBridge access token");
   const signal = AbortSignal.timeout(5000);
   let id = 0;
   async function request(method: "server/discover" | "tools/list" | "tools/call", params: Record<string, unknown> = {}) {
     id++;
     const response = await fetch(endpoint, { method: "POST", redirect: "error", signal,
-      headers: { Authorization: "Bearer " + token, Accept: "application/json, text/event-stream",
+      headers: { Accept: "application/json, text/event-stream",
         "Content-Type": "application/json", "Mcp-Method": method, "MCP-Protocol-Version": protocol,
         ...(method === "tools/call" ? { "Mcp-Name": toolName } : {}) },
       body: JSON.stringify({ jsonrpc: "2.0", id, method, params: { ...params, _meta: {
@@ -67,10 +66,10 @@ export async function readLocalBridgeEvidence(source: Source) {
   const [read] = z.tuple([tool]).parse(listed);
   if (!isDeepStrictEqual(read.inputSchema, inputSchema) || !isDeepStrictEqual(read.outputSchema, outputSchema) ||
       !isDeepStrictEqual(read.annotations, { readOnlyHint: true, openWorldHint: false }) ||
-      !isDeepStrictEqual(read._meta?.securitySchemes, [{ type: "oauth2", scopes: ["files"] }])) {
+      !isDeepStrictEqual(read._meta?.securitySchemes, [{ type: "noauth" }])) {
     throw new Error("Unexpected LocalBridge tool contract");
   }
-  const path = fileURLToPath(new URL("../dist/incident-evidence/" + expected.fixtureId + ".json", import.meta.url));
+  const path = win32.join(microbizSandbox, "incident-evidence", expected.fixtureId + ".json");
   const result = file.parse(await request("tools/call", { name: toolName, arguments: { path } }));
   const content = result.structuredContent.content;
   if (Buffer.byteLength(content) > 3072 || content !== result.content[0].text) throw new Error("Invalid evidence file");
